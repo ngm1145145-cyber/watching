@@ -16,8 +16,36 @@
 <p align="center">
   <a href="https://ngm1145145-cyber.github.io/watching/">🌐 项目主页</a> ·
   <a href="#五分钟上手">五分钟上手</a> ·
-  <a href="https://github.com/ngm1145145-cyber/watching/releases/latest">下载</a>
+  <a href="#下载">下载</a>
 </p>
+
+<p align="center">
+  仓库镜像：
+  <a href="https://github.com/ngm1145145-cyber/watching">GitHub</a> ·
+  <a href="https://gitee.com/ngm1145145-cyber/watching">Gitee</a> ·
+  <a href="https://gitcode.com/ngm1145145/watching">GitCode</a>
+</p>
+
+---
+
+## 下载
+
+| 平台 | 下载安装包 | 源码仓库 |
+| --- | --- | --- |
+| **Gitee**（国内推荐） | [Releases](https://gitee.com/ngm1145145-cyber/watching/releases) | <https://gitee.com/ngm1145145-cyber/watching> |
+| **GitHub** | [Releases](https://github.com/ngm1145145-cyber/watching/releases/latest) | <https://github.com/ngm1145145-cyber/watching> |
+| **GitCode** | [仓库首页](https://gitcode.com/ngm1145145/watching) | <https://gitcode.com/ngm1145145/watching> |
+
+需要的东西一共三个文件：
+
+| 文件 | 大小 | 给谁用 |
+| --- | --- | --- |
+| `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
+| `Watching-win-x64-framework.zip` | 0.16 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
+| `WatchingMobile-1.0.0.apk` | 39.4 MB | 安卓手机 |
+
+> 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
+> `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
 
 ---
 
@@ -363,7 +391,7 @@ watching/
 ├─ build-release.ps1            Windows 端一键发布（自包含 / 轻量）
 ├─ build-apk.ps1                安卓端一键编译 APK
 ├─ README.md
-├─ docs/                        项目介绍网页（GitHub Pages）
+├─ docs/                        项目介绍网页（可挂 GitHub / Gitee Pages）
 │   └─ index.html               单文件落地页，零外部依赖（可自行加截图）
 ├─ scripts/                     便利脚本文本（发布时复制为 shortcuts\）
 │   ├─ 1-启动服务端.bat
@@ -423,33 +451,37 @@ watching/
 
 ---
 
-## 项目主页（GitHub Pages）
+## 项目主页（介绍网页）
 
-仓库里的 `docs/index.html` 是一个**单文件**介绍网页（零外部依赖、无 CDN），可以直接用 GitHub Pages 托管：
+仓库里的 `docs/index.html` 是一个**单文件**介绍网页（零外部依赖、无 CDN），三家平台都能托管：
 
-1. 仓库 **Settings → Pages**
-2. Source 选 **Deploy from a branch**，分支选 `main`、目录选 **`/docs`**，保存
-3. 等一两分钟，访问 **<https://ngm1145145-cyber.github.io/watching/>**
+| 平台 | 怎么开 | 地址 |
+| --- | --- | --- |
+| **GitHub** | Settings → Pages → Source 选 `Deploy from a branch`，分支 `main`、目录 **`/docs`** | <https://ngm1145145-cyber.github.io/watching/> |
+| **Gitee** | 仓库 → 服务 → Gitee Pages → 部署目录选 `docs`（部分功能需实名/付费） | `https://ngm1145145-cyber.gitee.io/watching` |
+| **GitCode** | 仓库首页会直接渲染根目录 `README.md`；静态页在「项目设置 → Pages」里开启 | — |
 
-> 网页里的下载/源码/反馈链接由 `docs/index.html` 顶部那一行 `const REPO = "ngm1145145-cyber/watching";` 决定，
-> 如果改了仓库名，同步改这一处即可。
+> 网页里的三平台链接与下载按钮由 `docs/index.html` 顶部那段配置决定：
+> `const REPO_GH = "..."`、`const REPO_GITEE = "..."`、`const REPO_GITCODE = "..."`，改了仓库名同步改这三行即可。
 >
 > 本地预览：`node tools/serve-static.mjs docs 8099` 然后打开 `http://127.0.0.1:8099/`。
 
 ---
 
-## 自动发版（GitHub Actions）
+## 打 tag 发版
 
-`.github/workflows/release.yml` 会在你打 tag 时自动构建并发布：
+三家平台各自用各自的方式发版（仓库里不再放 CI 工作流）：
 
 ```bash
+# 打 tag 并推到三家
 git tag v1.0.0
-git push origin v1.0.0
+git push origin v1.0.0      # GitHub
+git push gitee  v1.0.0      # Gitee
+git push gitcode v1.0.0     # GitCode
 ```
 
-它会并行跑两个任务：Windows 上构建自包含版 + 轻量版并打包 zip，Ubuntu 上装好
-.NET Android 工作负载编译 APK，最后**自动作为附件挂到 Release**（并生成更新说明）。
-也可以在 Actions 页面手动触发，只构建不发版。
+然后到各平台的 Releases 页面把 `dist/` 里的三个包拖成附件（Gitee/GitCode 的 Release 也需要手动建）。
+如果想让 GitHub 那边**自动构建并发布**，把 `.github/workflows/release.yml` 加回来即可（可参考 git 历史里的 `db36aaf` 那个提交）。
 
 ---
 
