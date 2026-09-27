@@ -336,27 +336,41 @@
   </div>
 </section>
 
-<!-- ================= 截图 ================= -->
+<!-- ================= 界面说明 ================= -->
 <section id="shots">
   <div class="wrap">
-    <h2>实际效果</h2>
-    <p class="lead">下面都是真实运行截图：网页/App 显示的就是服务端那一刻的桌面。</p>
+    <h2>实际用起来是这样</h2>
+    <p class="lead">没有花哨的东西，就是「输入 IP → 看到那台电脑的桌面」。</p>
 
-    <div class="gallery">
-      <figure>
-        <img src="screenshots/desktop-client.png" alt="电脑客户端正在查看服务端屏幕" loading="lazy" />
-        <figcaption>电脑客户端：窗口里显示的就是服务端桌面（截图时服务端和客户端在同一台机器上，所以画面里能递归看到自己）</figcaption>
-      </figure>
-      <figure>
-        <img src="screenshots/web-mobile.png" alt="手机网页客户端" loading="lazy" />
-        <figcaption>网页客户端（手机尺寸）：实时显示服务端桌面，顶部是 fps / 码率 / 分辨率信息条</figcaption>
-      </figure>
-    </div>
+    <div class="grid g2">
+      <div class="card">
+        <div class="ic">💻</div>
+        <h3>电脑客户端</h3>
+        <p>顶部一行是 <code>IP</code> / <code>端口</code> / <code>密码</code> 和「连接」按钮；连上后画面铺满窗口，
+          顶栏显示 <b>fps · 码率 · 分辨率</b>，右边一排是 <b>画质</b> / <b>适应窗口</b> / <b>截图</b> / <b>全屏</b> / <b>断开</b>。</p>
+        <p style="margin-top:8px">按 <kbd>F11</kbd> 直接进全屏；全屏时控制条会淡出，鼠标一动又出来。</p>
+      </div>
 
-    <div class="note">
-      📷 截图占位说明：把 <code>docs/screenshots/</code> 里的图片换成你自己的实拍图效果更好 ——
-      建议放 <code>desktop-client.png</code>（电脑客户端）、<code>web-mobile.png</code>（手机）、
-      以及安卓 App 的真机截图。README 里也用到了这些图。
+      <div class="card">
+        <div class="ic">📱</div>
+        <h3>手机 / 网页</h3>
+        <p>手机 App 里填一次 IP 就记住，之后打开即连；顶部一条常驻信息显示实时 fps、码率和画面尺寸。</p>
+        <p style="margin-top:8px">双击画面 = 全屏，双指捏合 = 缩放，单指拖动 = 平移，按钮可切画质 / 截图 / 断开。</p>
+      </div>
+
+      <div class="card">
+        <div class="ic">🖥️</div>
+        <h3>服务端（几乎没有存在感）</h3>
+        <p>启动后屏幕上不出现任何窗口 —— 只有右下角托盘多一个蓝色眼睛图标。右键托盘可以看当前有几个客户端在连、
+          手机访问地址、开关远程控制、进设置、看日志、退出。</p>
+      </div>
+
+      <div class="card">
+        <div class="ic">🔐</div>
+        <h3>第一次进设置</h3>
+        <p>从未设过密码时可以直接进设置，界面里会提示「尚未设置密码」并引导你设一个。
+          设过之后每次进设置都要输密码；开启远程控制还要再验证一次。</p>
+      </div>
     </div>
   </div>
 </section>

@@ -21,19 +21,6 @@
 
 ---
 
-## 看看长什么样
-
-| 电脑客户端 | 网页客户端（手机） |
-| :---: | :---: |
-| <img src="docs/screenshots/desktop-client.png" alt="电脑客户端查看服务端屏幕" width="520" /> | <img src="docs/screenshots/web-mobile.png" alt="网页客户端查看服务端屏幕" width="240" /> |
-| 输入 IP 连接，`F11` 全屏 | 浏览器打开即可，支持全屏与缩放 |
-
-> 上面两张都是真实运行截图：客户端窗口里显示的就是服务端那一刻的桌面
-> （截图时服务端和客户端在同一台机器上，所以画面里能递归看到自己）。
-> 想换成自己的实拍图，直接替换 `docs/screenshots/` 里的两个文件即可，文件名保持不变。
-
----
-
 ## 这是什么
 
 `Watching` 把一台 Windows 电脑的屏幕，实时投给**同一局域网内**的手机或另一台电脑。
@@ -376,10 +363,8 @@ watching/
 ├─ build-release.ps1            Windows 端一键发布（自包含 / 轻量）
 ├─ build-apk.ps1                安卓端一键编译 APK
 ├─ README.md
-├─ .github/workflows/release.yml  打 tag 自动构建并发 Release
 ├─ docs/                        项目介绍网页（GitHub Pages）
-│   ├─ index.html               单文件落地页，零外部依赖
-│   └─ screenshots/             README 与网页共用的截图
+│   └─ index.html               单文件落地页，零外部依赖（可自行加截图）
 ├─ scripts/                     便利脚本文本（发布时复制为 shortcuts\）
 │   ├─ 1-启动服务端.bat
 │   ├─ 2-启动电脑客户端.bat
