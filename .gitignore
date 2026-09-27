@@ -1,0 +1,38 @@
+# 构建产物
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.userprefs
+
+# 发布产物（不提交到仓库，请用 GitHub Releases 分发）
+dist/
+*.apk
+*.idsig
+
+# 安卓相关
+*.keystore
+*.jks
+signing.properties
+
+# 本机 Android SDK / JDK（体积大且与机器相关）
+android-sdk/
+
+# 编辑器 / 系统
+.vs/
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# 日志与临时文件
+*.log
+.tmp/
+
+# NuGet
+*.nupkg
+packages/

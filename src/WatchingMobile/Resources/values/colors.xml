@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <color name="watching_bg">#0B0E14</color>
+  <color name="watching_panel">#161B26</color>
+  <color name="watching_line">#2A3341</color>
+  <color name="watching_fg">#E6EAF2</color>
+  <color name="watching_dim">#98A2B3</color>
+  <color name="watching_accent">#3B82F6</color>
+  <color name="watching_danger">#EF4444</color>
+  <color name="watching_ok">#22C55E</color>
+</resources>

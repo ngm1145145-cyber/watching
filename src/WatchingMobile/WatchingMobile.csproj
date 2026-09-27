@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Watching.Mobile</RootNamespace>
+    <AssemblyName>WatchingMobile</AssemblyName>
+    <ApplicationId>com.watching.mobile</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0.0</ApplicationDisplayVersion>
+
+    <!-- 直接产出可安装的 APK -->
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <RuntimeIdentifiers>android-arm64;android-arm</RuntimeIdentifiers>
+    <PublishTrimmed>false</PublishTrimmed>
+
+    <!-- 本机 Android SDK / JDK 路径（编译机器相关，可按需覆盖） -->
+    <AndroidSdkDirectory Condition="'$(AndroidSdkDirectory)' == ''">H:\ds-harness\android-sdk</AndroidSdkDirectory>
+    <JavaSdkDirectory Condition="'$(JavaSdkDirectory)' == ''">G:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot</JavaSdkDirectory>
+
+    <AndroidManifest>Properties\AndroidManifest.xml</AndroidManifest>
+    <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <NoWarn>$(NoWarn);XA4301;CS0618</NoWarn>
+  </PropertyGroup>
+
+</Project>

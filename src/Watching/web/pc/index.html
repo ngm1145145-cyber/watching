@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Watching · 电脑网页客户端</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0B0E14" />
+<link rel="stylesheet" href="/pc/style.css" />
+</head>
+<body>
+
+<div id="login">
+  <div class="card">
+    <div class="logo">Watching</div>
+    <div class="sub">电脑网页客户端 · 输入服务端 IP 地址即可查看屏幕</div>
+
+    <label>服务端 IP 地址</label>
+    <input id="host" type="text" autocomplete="off" spellcheck="false" placeholder="192.168.1.8" />
+
+    <label>端口</label>
+    <input id="port" type="number" value="8899" />
+
+    <label id="pwdLabel" class="hidden">访问密码</label>
+    <input id="pwd" class="hidden" type="password" autocomplete="off" />
+
+    <button id="go" class="primary">连接</button>
+    <div id="loginErr" class="err"></div>
+  </div>
+  <div class="tip">
+    提示：也可以直接下载使用电脑客户端（Watching.exe --client），画面更流畅，并且支持 F11 全屏。
+  </div>
+</div>
+
+<div id="viewer" class="hidden">
+  <canvas id="screen"></canvas>
+
+  <div id="hud" class="show">
+    <div class="hudTop">
+      <span class="pill" id="statPill">连接中…</span>
+      <span class="pill small" id="detailPill"></span>
+      <div class="spacer"></div>
+      <button id="btnFit" class="ghost">适应窗口 (F)</button>
+      <button id="btnSharp" class="ghost">画质:中</button>
+      <button id="btnFull" class="ghost">全屏 (F11)</button>
+      <button id="btnExit" class="ghost danger">断开</button>
+    </div>
+  </div>
+
+  <div id="reconnect" class="hidden">连接已断开，正在重连…</div>
+</div>
+
+<script src="/mobile/app.js"></script>
+<script src="/pc/main.js"></script>
+</body>
+</html>

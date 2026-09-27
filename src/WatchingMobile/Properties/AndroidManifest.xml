@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+  <application android:label="Watching"
+               android:icon="@drawable/appicon"
+               android:usesCleartextTraffic="true"
+               android:hardwareAccelerated="true"
+               android:allowBackup="true"
+               android:supportsRtl="false"
+               android:theme="@style/WatchingTheme">
+
+    <activity android:name="com.watching.mobile.MainActivity"
+              android:label="Watching"
+              android:exported="true"
+              android:launchMode="singleTask"
+              android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|density"
+              android:screenOrientation="fullSensor"
+              android:theme="@style/WatchingTheme">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+
+  </application>
+
+</manifest>

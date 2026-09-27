@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Watching · 手机客户端</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#0B0E14" />
+<link rel="stylesheet" href="/mobile/style.css" />
+</head>
+<body>
+
+<!-- 连接面板 -->
+<div id="login">
+  <div class="card">
+    <div class="logo">Watching</div>
+    <div class="sub">连接电脑服务端，查看它的屏幕</div>
+
+    <label>服务端 IP 地址</label>
+    <input id="host" type="text" inputmode="url" autocomplete="off" spellcheck="false" />
+
+    <label>端口</label>
+    <input id="port" type="number" inputmode="numeric" value="8899" />
+
+    <label id="pwdLabel" class="hidden">访问密码</label>
+    <input id="pwd" class="hidden" type="password" autocomplete="off" />
+
+    <div class="row">
+      <label class="inline"><input id="remember" type="checkbox" checked /> 记住地址</label>
+    </div>
+
+    <button id="go" class="primary">开始观看</button>
+    <div id="loginErr" class="err"></div>
+  </div>
+  <div class="tip">提示：如果这台手机和电脑在同一个 WiFi 下，输入电脑的局域网 IP 即可。地址可以带端口，例如 192.168.1.8:8899。</div>
+</div>
+
+<!-- 观看界面 -->
+<div id="viewer" class="hidden">
+  <canvas id="screen"></canvas>
+
+  <div id="hud" class="show">
+    <div class="hudTop">
+      <div class="pill" id="statPill">连接中…</div>
+      <div class="spacer"></div>
+      <button id="btnFull" class="ghost" title="全屏">全屏</button>
+      <button id="btnFit" class="ghost" title="适应屏幕">适应</button>
+      <button id="btnSharp" class="ghost" title="清晰度">画质:中</button>
+    </div>
+
+    <div class="hudBottom">
+      <div class="pill small" id="detailPill"></div>
+      <div class="spacer"></div>
+      <button id="btnSnap" class="ghost">截图</button>
+      <button id="btnExit" class="ghost danger">断开</button>
+    </div>
+  </div>
+
+  <div id="reconnect" class="hidden">连接已断开，正在重连…</div>
+</div>
+
+<script src="/mobile/app.js"></script>
+<script src="/mobile/main.js"></script>
+</body>
+</html>

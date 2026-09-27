@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+  <style name="WatchingTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <item name="android:windowBackground">@color/watching_bg</item>
+    <item name="android:colorBackground">@color/watching_bg</item>
+    <item name="android:statusBarColor">@color/watching_panel</item>
+    <item name="android:navigationBarColor">@color/watching_panel</item>
+    <item name="android:windowLightStatusBar">false</item>
+  </style>
+
+  <style name="WatchingTheme.Fullscreen" parent="@style/WatchingTheme">
+    <item name="android:windowFullscreen">true</item>
+    <item name="android:windowContentOverlay">@null</item>
+  </style>
+
+</resources>

@@ -1,0 +1,168 @@
+using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
+using Watching.Common;
+
+namespace Watching.Server;
+
+/// <summary>帧在 WebSocket 之外复用的一套自描述二进制封装（HTTP 抓图接口也用）。</summary>
+public static class FramePacket
+{
+    public const int MetaSize = 256;
+    public const int HeaderSize = 4 + 8 + MetaSize; // magic + seq + meta
+
+    private static readonly JsonSerializerOptions Opts = new() { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
+
+    public sealed class Meta
+    {
+        public int w { get; set; }
+        public int h { get; set; }
+        public int sw { get; set; }
+        public int sh { get; set; }
+        public int q { get; set; }
+        public bool crop { get; set; }
+        public long ts { get; set; }
+        public string mode { get; set; }
+        public double capMs { get; set; }
+        public double encMs { get; set; }
+    }
+
+    /// <summary>打包一帧：4 字节魔数 + 8 字节序号 + 256 字节 JSON 元数据 + JPEG。</summary>
+    public static byte[] Pack(long seq, Meta meta, byte[] jpeg)
+    {
+        var json = JsonSerializer.SerializeToUtf8Bytes(meta, Opts);
+        if (json.Length > MetaSize) throw new InvalidOperationException("元数据过大");
+
+        var buf = new byte[HeaderSize + jpeg.Length];
+        buf[0] = (byte)'W'; buf[1] = (byte)'F';
+        buf[2] = (byte)'0'; buf[3] = (byte)'1';
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(4, 8), seq);
+        Array.Copy(json, 0, buf, 12, json.Length);
+        Array.Copy(jpeg, 0, buf, HeaderSize, jpeg.Length);
+        return buf;
+    }
+
+    public static bool TryUnpack(byte[] data, out long seq, out Meta meta, out int jpegOffset)
+    {
+        seq = 0; meta = null; jpegOffset = 0;
+        if (data == null || data.Length < HeaderSize) return false;
+        if (data[0] != 'W' || data[1] != 'F' || data[2] != '0' || data[3] != '1') return false;
+
+        seq = BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(4, 8));
+        int len = 0;
+        while (len < MetaSize && data[12 + len] != 0) len++;
+        try
+        {
+            meta = JsonSerializer.Deserialize<Meta>(Encoding.UTF8.GetString(data, 12, len), Opts);
+        }
+        catch
+        {
+            return false;
+        }
+        jpegOffset = HeaderSize;
+        return meta != null;
+    }
+}
+
+/// <summary>极简 WebSocket 服务端实现（RFC6455，仅服务端方向）。</summary>
+public static class WebSocketProtocol
+{
+    private const string Guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    private static readonly Encoding Utf8 = new UTF8Encoding(false);
+
+    public const int OpContinuation = 0x0;
+    public const int OpText = 0x1;
+    public const int OpBinary = 0x2;
+    public const int OpClose = 0x8;
+    public const int OpPing = 0x9;
+    public const int OpPong = 0xA;
+
+    public static string ComputeAccept(string key)
+    {
+        using var sha = System.Security.Cryptography.SHA1.Create();
+        return Convert.ToBase64String(sha.ComputeHash(Encoding.ASCII.GetBytes(key + Guid)));
+    }
+
+    public static async System.Threading.Tasks.Task WriteFrameAsync(NetworkStream stream, byte[] payload,
+        int opCode = OpBinary, System.Threading.CancellationToken ct = default)
+    {
+        payload ??= Array.Empty<byte>();
+        int len = payload.Length;
+        int headerLen = len < 126 ? 2 : (len <= ushort.MaxValue ? 4 : 10);
+        var header = new byte[headerLen];
+        header[0] = (byte)(0x80 | (opCode & 0x0F));
+        if (len < 126) header[1] = (byte)len;
+        else if (len <= ushort.MaxValue)
+        {
+            header[1] = 126;
+            BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(2, 2), (ushort)len);
+        }
+        else
+        {
+            header[1] = 127;
+            BinaryPrimitives.WriteUInt64BigEndian(header.AsSpan(2, 8), (ulong)len);
+        }
+
+        await stream.WriteAsync(header, ct).ConfigureAwait(false);
+        if (len > 0) await stream.WriteAsync(payload, ct).ConfigureAwait(false);
+    }
+
+    public static System.Threading.Tasks.Task WriteTextAsync(NetworkStream stream, string text,
+        System.Threading.CancellationToken ct = default)
+        => WriteFrameAsync(stream, Utf8.GetBytes(text ?? ""), OpText, ct);
+
+    public static async System.Threading.Tasks.Task<(int opCode, byte[] payload)> ReadFrameAsync(
+        NetworkStream stream, System.Threading.CancellationToken ct = default)
+    {
+        var head = await ReadExactAsync(stream, 2, ct).ConfigureAwait(false);
+        int b0 = head[0], b1 = head[1];
+        int op = b0 & 0x0F;
+        bool masked = (b1 & 0x80) != 0;
+        long len = b1 & 0x7F;
+
+        if (len == 126)
+        {
+            var ext = await ReadExactAsync(stream, 2, ct).ConfigureAwait(false);
+            len = BinaryPrimitives.ReadUInt16BigEndian(ext);
+        }
+        else if (len == 127)
+        {
+            var ext = await ReadExactAsync(stream, 8, ct).ConfigureAwait(false);
+            len = (long)BinaryPrimitives.ReadUInt64BigEndian(ext);
+        }
+
+        if (len > 16 * 1024 * 1024) throw new IOException("WebSocket 帧过大");
+
+        byte[] mask = null;
+        if (masked)
+        {
+            mask = await ReadExactAsync(stream, 4, ct).ConfigureAwait(false);
+        }
+
+        var payload = len == 0 ? Array.Empty<byte>() : await ReadExactAsync(stream, (int)len, ct).ConfigureAwait(false);
+        if (masked)
+        {
+            for (int i = 0; i < payload.Length; i++) payload[i] ^= mask[i % 4];
+        }
+
+        return (op, payload);
+    }
+
+    private static async System.Threading.Tasks.Task<byte[]> ReadExactAsync(NetworkStream stream, int count,
+        System.Threading.CancellationToken ct)
+    {
+        var buf = new byte[count];
+        int off = 0;
+        while (off < count)
+        {
+            int n = await stream.ReadAsync(buf.AsMemory(off, count - off), ct).ConfigureAwait(false);
+            if (n <= 0) throw new IOException("连接已关闭");
+            off += n;
+        }
+        return buf;
+    }
+}

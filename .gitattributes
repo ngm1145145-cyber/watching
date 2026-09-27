@@ -1,0 +1,19 @@
+# 统一换行符：源码在 Windows 上编写，但保证在其它平台检出也正常
+* text=auto eol=lf
+
+# Windows 批处理必须保持 CRLF，否则可能执行异常
+*.bat text eol=crlf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.ico binary
+*.apk binary
+*.zip binary
+*.dll binary
+*.exe binary
+
+# 让 GitHub 语言统计不把网页资源算错
+*.html linguist-detectable=true
+*.js   linguist-detectable=true
+*.css  linguist-detectable=true
