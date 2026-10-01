@@ -8,7 +8,7 @@
   <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
   <application android:label="Watching"
-               android:icon="@drawable/appicon"
+               android:icon="@mipmap/appicon"
                android:usesCleartextTraffic="true"
                android:hardwareAccelerated="true"
                android:allowBackup="true"

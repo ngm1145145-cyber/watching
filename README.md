@@ -539,6 +539,26 @@ IP 形如 `192.168.x.x` 或 `10.x.x.x`，注意不要用 `127.0.0.1`（那是本
 </details>
 
 <details>
+<summary><b>App 一打开就闪退？</b></summary>
+
+先看是哪个版本的包。**1.0.0 早期构建里有个已知问题已修复**：启动图标用的是矢量图（`@drawable/appicon`），
+Android 7.x 不支持矢量启动图标，会在启动时崩溃。现在已改为标准密度的 PNG 图标（48/72/96/144/192）。
+
+排查步骤：
+
+1. 确认装的是最新包：`apkanalyzer manifest print WatchingMobile.apk | grep icon` 应指向 `mipmap`，
+   或直接看 APK 里有没有 `res/mipmap-*/appicon.png`。
+2. 用数据线连电脑抓日志（最有用）：
+   ```bash
+   adb logcat -c && adb logcat | findstr /i "watching AndroidRuntime"
+   ```
+   打开 App 后，`AndroidRuntime` 那几行会直接写明崩在哪个类、什么异常。
+3. App 自己也会在 `Android/data/com.watching.mobile/files/crash.log` 留一份堆栈（如果崩溃发生在启动阶段）。
+4. 只编译不重打包也会拿到旧 APK —— 本仓库的 `build-apk.ps1` 已经改成先清 `obj` 再 `dotnet publish`，
+   避免增量构建跳过 APK 打包。
+</details>
+
+<details>
 <summary><b>能跨公网 / 异地使用吗？</b></summary>
 
 可以，但需要自己解决网络互通：把服务端的 8899 端口通过路由器端口转发暴露出去（**强烈建议同时开启客户端访问密码**），
