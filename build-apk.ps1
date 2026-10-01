@@ -48,7 +48,7 @@ $built = Join-Path $apkDir "com.watching.mobile-Signed.apk"
 if (-not (Test-Path $built)) { throw "APK not found: $built" }
 
 New-Item -ItemType Directory -Force $dist | Out-Null
-$target = Join-Path $dist "WatchingMobile-1.0.0.apk"
+$target = Join-Path $dist "WatchingMobile-1.0.1.apk"
 Copy-Item $built $target -Force
 
 $mb = [Math]::Round((Get-Item $target).Length / 1MB, 2)
