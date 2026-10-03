@@ -49,6 +49,13 @@ public class MainActivity : Activity
     private TextView _statusText, _detailText;
     private Button _qualityButton, _fullscreenButton;
 
+    // 远程控制
+    private Button _controlButton, _keyboardButton;
+    private TextView _controlHint;
+    private EditText _keyInput;
+    private bool _controlMode;
+    private bool _remoteKeyDown;
+
     private ScreenClient _client;
     private bool _fullscreen;
     private bool _hudVisible = true;
@@ -264,6 +271,8 @@ public class MainActivity : Activity
 
         _image = new ScreenImageView(this);
         _image.DoubleTapped += ToggleImmersive;
+        // 控制模式下，单指触摸当作鼠标转发给服务端
+        _image.RemoteTouchHandler = OnRemoteTouch;
         _viewerPanel.AddView(_image, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
@@ -310,6 +319,37 @@ public class MainActivity : Activity
         top.AddView(exit);
 
         bar.AddView(top);
+
+        // 第二行：远程控制开关 + 键盘
+        var ctrlRow = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        ctrlRow.SetGravity(GravityFlags.CenterVertical);
+
+        _controlButton = FlatButton("控制:关");
+        _controlButton.Click += (_, _) => ToggleControl();
+        ctrlRow.AddView(_controlButton, Lp(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent, 0, 0));
+
+        _keyboardButton = FlatButton("键盘");
+        _keyboardButton.Visibility = ViewStates.Gone;
+        _keyboardButton.Click += (_, _) => ShowSoftKeyboard();
+        ctrlRow.AddView(_keyboardButton);
+
+        _controlHint = new TextView(this) { Text = "" };
+        _controlHint.SetTextSize(Android.Util.ComplexUnitType.Sp, 11f);
+        _controlHint.SetTextColor(Color.ParseColor("#98A2B3"));
+        ctrlRow.AddView(_controlHint, Lp(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        bar.AddView(ctrlRow);
+
+        // 隐藏的输入框：控制模式下点「键盘」聚焦它，用输入法打字
+        _keyInput = new EditText(this);
+        _keyInput.SetSingleLine(true);
+        _keyInput.SetTextColor(Color.Transparent);
+        _keyInput.SetBackgroundColor(Color.Transparent);
+        _keyInput.SetCursorVisible(false);
+        _keyInput.ImeOptions = Android.Views.InputMethods.ImeAction.Done;
+        _keyInput.AddTextChangedListener(new KeyWatcher(this));
+        var hiddenLp = new LinearLayout.LayoutParams(2, 2);
+        bar.AddView(_keyInput, hiddenLp);
 
         _detailText = new TextView(this) { Text = "" };
         _detailText.SetTextSize(Android.Util.ComplexUnitType.Sp, 11f);
@@ -529,8 +569,14 @@ public class MainActivity : Activity
             {
                 var who = string.IsNullOrEmpty(msg.MachineName) ? _client?.Host : msg.MachineName;
                 _detailBase = $"服务端 {who} · 屏幕 {msg.ScreenWidth}×{msg.ScreenHeight}" +
-                              (msg.RemoteControl ? " · 允许远程控制" : "");
+                              (msg.RemoteControl ? " · 可远程控制" : " · 仅观看");
                 UpdateDetailWithDelta();
+                UpdateControlUi();
+            }
+            else if (msg.Type == "state")
+            {
+                // 服务端开关远程控制时，客户端界面跟着更新
+                UpdateControlUi();
             }
             else if (msg.Type == "error" && !string.IsNullOrEmpty(msg.Message))
             {
@@ -639,6 +685,133 @@ public class MainActivity : Activity
             baseText = $"服务端 {_client.ServerName} · 屏幕 {_client.ScreenWidth}×{_client.ScreenHeight}";
 
         _detailText.Text = (baseText ?? "") + (_lastDeltaRatio > 0.01 ? $" · 增量 {_lastDeltaRatio:P0}" : "");
+    }
+
+    // ---------------- 远程控制 ----------------
+
+    /// <summary>切换「控制」开关。服务端没开远程控制时给出提示。</summary>
+    private void ToggleControl()
+    {
+        if (_client == null) return;
+
+        if (!_client.RemoteControlEnabled)
+        {
+            _controlHint.Text = "服务端未开启远程控制";
+            new AlertDialog.Builder(this)
+                .SetTitle("无法控制")
+                .SetMessage("服务端没有开启「允许远程控制」。\n\n请在服务端那台电脑上：托盘图标右键 → 设置 → " +
+                            "勾选「允许客户端远程控制本机鼠标和键盘」（需要先设置密码并验证）。")
+                .SetPositiveButton("知道了", (_, _) => { })
+                .Show();
+            UpdateControlUi();
+            return;
+        }
+
+        _controlMode = !_controlMode;
+        UpdateControlUi();
+
+        if (_controlMode)
+        {
+            _controlHint.Text = "点按=单击，按住拖动=按住左键";
+            _image.FitToScreen = true;   // 控制时用适应窗口，坐标最直观
+        }
+        else
+        {
+            _controlHint.Text = "";
+            _remoteKeyDown = false;
+            HideSoftKeyboard();
+        }
+    }
+
+    private void UpdateControlUi()
+    {
+        if (_controlButton == null) return;
+
+        bool allowed = _client?.RemoteControlEnabled == true;
+        _controlButton.Text = !allowed ? "控制:不可用" : (_controlMode ? "控制:开" : "控制:关");
+        _keyboardButton.Visibility = (_controlMode && allowed) ? ViewStates.Visible : ViewStates.Gone;
+
+        if (!allowed && _controlMode)
+        {
+            _controlMode = false;
+        }
+    }
+
+    /// <summary>单指触摸 → 鼠标事件。</summary>
+    private bool OnRemoteTouch(MotionEvent e)
+    {
+        if (!_controlMode || _client == null) return false;
+
+        float nx, ny;
+        if (!_image.TryMapToImage(e.GetX(), e.GetY(), out nx, out ny)) return false;
+
+        switch (e.ActionMasked)
+        {
+            case MotionEventActions.Down:
+                _remoteKeyDown = true;
+                _client.Send(new ClientMessage { Type = "input", Kind = "move", X = nx, Y = ny });
+                _client.Send(new ClientMessage { Type = "input", Kind = "down", Button = "left", X = nx, Y = ny });
+                return true;
+
+            case MotionEventActions.Move:
+                _client.Send(new ClientMessage { Type = "input", Kind = "move", X = nx, Y = ny });
+                return true;
+
+            case MotionEventActions.Up:
+                _client.Send(new ClientMessage { Type = "input", Kind = "up", Button = "left", X = nx, Y = ny });
+                _remoteKeyDown = false;
+                return true;
+
+            case MotionEventActions.Cancel:
+                if (_remoteKeyDown)
+                {
+                    _client.Send(new ClientMessage { Type = "input", Kind = "up", Button = "left", X = nx, Y = ny });
+                    _remoteKeyDown = false;
+                }
+                return true;
+        }
+
+        return false;
+    }
+
+    private void ShowSoftKeyboard()
+    {
+        if (!_controlMode) return;
+        _keyInput.Text = "";
+        _keyInput.RequestFocus();
+        var imm = (Android.Views.InputMethods.InputMethodManager)
+            GetSystemService(Android.Content.Context.InputMethodService);
+        imm?.ShowSoftInput(_keyInput, Android.Views.InputMethods.ShowFlags.Implicit);
+    }
+
+    private void HideSoftKeyboard()
+    {
+        var imm = (Android.Views.InputMethods.InputMethodManager)GetSystemService(InputMethodService);
+        imm?.HideSoftInputFromWindow(_keyInput.WindowToken, 0);
+        _keyInput.ClearFocus();
+    }
+
+    /// <summary>把输入法上屏的字符发到服务端（中文、表情等也能用）。</summary>
+    private sealed class KeyWatcher : Java.Lang.Object, Android.Text.ITextWatcher
+    {
+        private readonly MainActivity _owner;
+        public KeyWatcher(MainActivity owner) => _owner = owner;
+
+        public void AfterTextChanged(Android.Text.IEditable s)
+        {
+            if (!_owner._controlMode || s == null || s.Length() == 0) return;
+
+            string text = s.ToString();
+            for (int i = 0; i < text.Length; i++)
+            {
+                string ch = text.Substring(i, 1);
+                _owner._client?.Send(new ClientMessage { Type = "input", Kind = "key", Key = ch });
+            }
+            s.Clear();
+        }
+
+        public void BeforeTextChanged(Java.Lang.ICharSequence s, int start, int count, int after) { }
+        public void OnTextChanged(Java.Lang.ICharSequence s, int start, int before, int count) { }
     }
 
     // ---------------- 画质 / 全屏 ----------------

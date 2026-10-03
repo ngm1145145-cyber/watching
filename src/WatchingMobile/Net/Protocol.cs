@@ -151,6 +151,7 @@ public sealed class ClientMessage
     [JsonPropertyName("maxWidth")] public int? MaxWidth { get; set; }
     [JsonPropertyName("x")] public double? X { get; set; }
     [JsonPropertyName("y")] public double? Y { get; set; }
+    [JsonPropertyName("button")] public string Button { get; set; }
     [JsonPropertyName("key")] public string Key { get; set; }
     [JsonPropertyName("delta")] public int? Delta { get; set; }
 

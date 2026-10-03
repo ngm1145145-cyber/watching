@@ -87,8 +87,40 @@ public sealed class ScreenImageView : ImageView
         ImageMatrix = _matrix;
     }
 
+    /// <summary>
+    /// 把控件内的坐标（像素）换算成画面内的归一化坐标（0~1），用于远程控制。
+    /// 自动考虑当前缩放与平移；落在画面外时返回 false。
+    /// </summary>
+    public bool TryMapToImage(float viewX, float viewY, out float nx, out float ny)
+    {
+        nx = ny = 0f;
+        if (_sourceWidth <= 0 || _sourceHeight <= 0) return false;
+
+        using var inverse = new Matrix();
+        if (!_matrix.Invert(inverse)) return false;
+
+        var pts = new float[] { viewX, viewY };
+        inverse.MapPoints(pts);
+
+        float x = pts[0], y = pts[1];
+        if (x < -2 || x > _sourceWidth + 2 || y < -2 || y > _sourceHeight + 2) return false;
+
+        nx = Math.Clamp(x / _sourceWidth, 0f, 1f);
+        ny = Math.Clamp(y / _sourceHeight, 0f, 1f);
+        return true;
+    }
+
+    /// <summary>控制模式：单指触摸当作鼠标，交给 MainActivity 转发；返回 true 表示已消费。</summary>
+    public Func<MotionEvent, bool> RemoteTouchHandler { get; set; }
+
     public override bool OnTouchEvent(MotionEvent e)
     {
+        // 控制模式下单指直接当鼠标用（双指仍然用于缩放）
+        if (RemoteTouchHandler != null && e.PointerCount <= 1)
+        {
+            if (RemoteTouchHandler(e)) return true;
+        }
+
         _gestureDetector.OnTouchEvent(e);
         _scaleDetector.OnTouchEvent(e);
 

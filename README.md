@@ -1,4 +1,4 @@
-﻿# Watching · 局域网远程屏幕查看
+# Watching · 局域网远程屏幕查看
 
 <p align="center">
   <b>一个自己写的局域网看屏工具：电脑服务端静默抓屏，手机 / 电脑客户端按 IP 连上去看。</b><br />
@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
 | `Watching-win-x64-framework.zip` | 0.16 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
-| `WatchingMobile-1.0.5.apk` | 39.4 MB | 安卓手机 |
+| `WatchingMobile-1.0.6.apk` | 39.4 MB | 安卓手机 |
 
 > 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
 > `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
@@ -169,8 +169,8 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 
 ### 3️⃣ 在 B（手机）上看
 
-**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.5.apk` 传到手机安装
-（或数据线连上后 `adb install -r WatchingMobile-1.0.5.apk`）。
+**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.6.apk` 传到手机安装
+（或数据线连上后 `adb install -r WatchingMobile-1.0.6.apk`）。
 打开 App → 填 `192.168.1.8` 和端口 `8899` → 「开始观看」。
 
 **方式二：用浏览器** —— 手机浏览器打开 `http://192.168.1.8:8899/` → 「开始观看」，免安装。
@@ -242,16 +242,28 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 2. 系统会要求你输入设置密码再确认一次；
 3. 保存后各客户端会显示「可远程控制」，这时才允许发操作指令。
 
-### 三种客户端分别怎么操作
+### 四种客户端分别怎么操作
 
 | 客户端 | 怎么开启 | 能做什么 |
 | --- | --- | --- |
 | **电脑客户端**（WPF） | 连接栏的「允许远程控制」勾上（服务端允许时自动勾选） | 移动鼠标即移动对方光标、左/右键点击、滚轮、键盘输入（含 Ctrl/Alt/Shift/Win 组合键） |
-| **电脑网页客户端** | 顶栏点 **「控制:关」** 切成「控制:开」 | 同上：点击/拖动、滚轮、键盘（F11 仍是网页全屏） |
-| **手机网页客户端** | 顶部点 **「控制:关」** 切成「控制:开」 | 手指点按 = 单击、按住拖动 = 按住左键拖动（拖窗口/划选）、双指缩放仍保留；点「键盘」调出输入法即可打字 |
+| **安卓 App** | 顶部点 **「控制:关」** 切成「控制:开」 | 单指点按 = 单击、按住拖动 = 按住左键拖动；点 **「键盘」** 调出输入法打字；双指缩放不受影响 |
+| **电脑网页客户端** | 顶栏点 **「控制:关」** 切成「控制:开」 | 点击/拖动、滚轮、键盘（F11 仍是网页全屏） |
+| **手机网页客户端** | 顶部点 **「控制:关」** 切成「控制:开」 | 同安卓 App（点按/拖动 + 「键盘」按钮） |
+
+**安卓 App 具体操作步骤：**
+
+1. 连接成功后，顶部信息条会显示「可远程控制」，下面出现 **「控制:关」** 按钮。
+2. 点它变成 **「控制:开」**（会自动切到「适应屏幕」，让手指位置和真实坐标一一对应）：
+   - **单指点按** → 对方电脑上一次左键单击
+   - **按住并拖动** → 按住左键拖动（拖窗口、划选文字）
+   - **双指捏合** → 仍然是缩放查看，不会误操作对方
+3. 打字：点 **「键盘」** → 弹出输入法 → 输入内容发到对方电脑（支持退格、回车、
+   中文/表情走 Unicode 注入）。
+4. 再点一次「控制:开」回到只读模式。
 
 > 开启控制后画面会出现**蓝色描边**作为提示，避免误操作。
-> 手机端在「适应屏幕」状态下单指拖动就是操作对方，不会平移本地视图；放大后再拖动才是平移。
+> 服务端没开远程控制时，按钮显示 **「控制:不可用」**，点它会提示去服务端哪里打开。
 
 ### 实现方式
 
@@ -333,12 +345,12 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 `
     -SdkDir "D:\android-sdk" -JdkDir "C:\Program Files\Eclipse Adoptium\jdk-17"
 ```
 
-产物：`dist\apk\WatchingMobile-1.0.5.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
+产物：`dist\apk\WatchingMobile-1.0.6.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
 
 安装：
 
 ```bash
-adb install -r dist/apk/WatchingMobile-1.0.5.apk
+adb install -r dist/apk/WatchingMobile-1.0.6.apk
 ```
 
 > 首次编译安卓端需要 `.NET android` 工作负载：`dotnet workload install android`。
@@ -520,7 +532,7 @@ watching/
 │   ├─ serve-static.mjs         本地预览 docs/ 落地页的极简静态服务器
 │   └─ ProtocolCheck/           复用安卓 App 的网络源码，在 Windows 上验证协议
 └─ dist/                        构建产物（未提交到仓库，见 .gitignore）
-    ├─ apk/WatchingMobile-1.0.5.apk
+    ├─ apk/WatchingMobile-1.0.6.apk
     ├─ Watching-win-x64-selfcontained/
     └─ Watching-win-x64-framework/
 ```
