@@ -125,7 +125,7 @@ public sealed class ScreenClient : IDisposable
                     Type = "hello",
                     Kind = "mobile",
                     Name = ClientName,
-                    Version = "1.0.4"
+                    Version = "1.0.5"
                 }.ToJson(), ct).ConfigureAwait(false);
 
                 _statTick = Environment.TickCount64;

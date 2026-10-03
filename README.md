@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
 | `Watching-win-x64-framework.zip` | 0.16 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
-| `WatchingMobile-1.0.4.apk` | 39.4 MB | 安卓手机 |
+| `WatchingMobile-1.0.5.apk` | 39.4 MB | 安卓手机 |
 
 > 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
 > `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
@@ -169,8 +169,8 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 
 ### 3️⃣ 在 B（手机）上看
 
-**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.4.apk` 传到手机安装
-（或数据线连上后 `adb install -r WatchingMobile-1.0.4.apk`）。
+**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.5.apk` 传到手机安装
+（或数据线连上后 `adb install -r WatchingMobile-1.0.5.apk`）。
 打开 App → 填 `192.168.1.8` 和端口 `8899` → 「开始观看」。
 
 **方式二：用浏览器** —— 手机浏览器打开 `http://192.168.1.8:8899/` → 「开始观看」，免安装。
@@ -240,12 +240,29 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 
 1. 托盘右键 → 设置 → 打开「允许客户端远程控制本机鼠标和键盘」；
 2. 系统会要求你输入设置密码再确认一次；
-3. 保存后，客户端的状态栏会显示「可远程控制」，此时鼠标移动、点击、滚轮和键盘输入才会被转发到 A。
+3. 保存后各客户端会显示「可远程控制」，这时才允许发操作指令。
 
-技术实现：服务端通过 `SendInput` 注入输入事件，坐标从客户端的归一化坐标（0–1）换算到屏幕绝对像素。
+### 三种客户端分别怎么操作
 
+| 客户端 | 怎么开启 | 能做什么 |
+| --- | --- | --- |
+| **电脑客户端**（WPF） | 连接栏的「允许远程控制」勾上（服务端允许时自动勾选） | 移动鼠标即移动对方光标、左/右键点击、滚轮、键盘输入（含 Ctrl/Alt/Shift/Win 组合键） |
+| **电脑网页客户端** | 顶栏点 **「控制:关」** 切成「控制:开」 | 同上：点击/拖动、滚轮、键盘（F11 仍是网页全屏） |
+| **手机网页客户端** | 顶部点 **「控制:关」** 切成「控制:开」 | 手指点按 = 单击、按住拖动 = 按住左键拖动（拖窗口/划选）、双指缩放仍保留；点「键盘」调出输入法即可打字 |
+
+> 开启控制后画面会出现**蓝色描边**作为提示，避免误操作。
+> 手机端在「适应屏幕」状态下单指拖动就是操作对方，不会平移本地视图；放大后再拖动才是平移。
+
+### 实现方式
+
+服务端通过 `SendInput` 注入输入事件，坐标从客户端的归一化坐标（0–1）换算到屏幕绝对像素。
+支持的指令：`move` / `down` / `up` / `click` / `wheel` / `key`（带 ctrl/alt/shift/win）。
+
+> ⚠️ **看不到鼠标？** Windows 的抓屏 API 本身不含光标，所以服务端会额外用
+> `GetCursorInfo` + `DrawIconEx` 把光标画进画面（设置里可关，默认开）。
+>
 > ⚠️ 如果目标窗口以管理员身份运行，Windows 的 UIPI 机制会拒绝普通权限进程的注入；
-> 需要控制这类窗口时，请以管理员身份运行服务端。
+> 需要控制这类窗口时，请以管理员身份运行服务端。客户端状态栏也给了这条提示。
 
 ---
 
@@ -316,12 +333,12 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 `
     -SdkDir "D:\android-sdk" -JdkDir "C:\Program Files\Eclipse Adoptium\jdk-17"
 ```
 
-产物：`dist\apk\WatchingMobile-1.0.4.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
+产物：`dist\apk\WatchingMobile-1.0.5.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
 
 安装：
 
 ```bash
-adb install -r dist/apk/WatchingMobile-1.0.4.apk
+adb install -r dist/apk/WatchingMobile-1.0.5.apk
 ```
 
 > 首次编译安卓端需要 `.NET android` 工作负载：`dotnet workload install android`。
@@ -503,7 +520,7 @@ watching/
 │   ├─ serve-static.mjs         本地预览 docs/ 落地页的极简静态服务器
 │   └─ ProtocolCheck/           复用安卓 App 的网络源码，在 Windows 上验证协议
 └─ dist/                        构建产物（未提交到仓库，见 .gitignore）
-    ├─ apk/WatchingMobile-1.0.4.apk
+    ├─ apk/WatchingMobile-1.0.5.apk
     ├─ Watching-win-x64-selfcontained/
     └─ Watching-win-x64-framework/
 ```

@@ -465,7 +465,7 @@ public sealed class ClientConnection : IDisposable
                     MaxWidth = _maxWidth,
                     RemoteControl = _host.RemoteControlEnabled,
                     MachineName = Environment.MachineName,
-                    Version = "1.0.4"
+                    Version = "1.0.5"
                 });
                 _host.OnClientSettingsChanged(this);
                 break;

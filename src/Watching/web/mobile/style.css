@@ -94,6 +94,16 @@ button.ghost.danger { color: #FCA5A5; }
 .pill.ok { color: #86EFAC; }
 .pill.bad { color: #FCA5A5; }
 
+/* 控制模式：画面可操作时给个明显的边框提示 */
+body.control-mode #screen { outline: 2px solid rgba(59, 130, 246, 0.85); outline-offset: -2px; }
+body.control-mode #btnCtrl { background: #2563EB; border-color: #2563EB; color: #fff; }
+
+/* 软键盘接收框：移出屏幕，聚焦时弹出输入法但不遮挡画面 */
+.kbdcatcher {
+  position: fixed; left: -9999px; top: 0;
+  width: 1px; height: 1px; opacity: 0; border: 0; padding: 0;
+}
+
 #reconnect {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   background: rgba(0,0,0,0.75); border: 1px solid var(--line);

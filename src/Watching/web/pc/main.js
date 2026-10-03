@@ -13,6 +13,7 @@
   ];
   var qualityLevel = 1;
   var hudTimer = null;
+  var serverAllowsRemote = false;   // 服务端是否允许远程控制
 
   var saved = null;
   try { saved = JSON.parse(localStorage.getItem('watching.pc') || 'null'); } catch (e) { }
@@ -31,8 +32,7 @@
   var viewer = new Watching.Viewer(canvas, {
     kind: 'web',
     name: 'PC浏览器',
-    wheelZoom: true,
-    onOpen: function () {
+    wheelZoom: true,    onOpen: function () {
       reconnectBox.classList.add('hidden');
       statPill.textContent = '已连接';
       statPill.className = 'pill ok';
@@ -49,8 +49,13 @@
     },
     onMessage: function (msg) {
       if (msg.t === 'welcome') {
+        serverAllowsRemote = !!msg.remote;
         detailPill.textContent = '服务端 ' + (msg.name || '') + ' · 屏幕 ' + (msg.sw || '?') + '×' + (msg.sh || '?') +
-          (msg.remote ? ' · 允许远程控制' : '');
+          (msg.remote ? ' · 允许远程控制' : ' · 仅观看');
+        updateControlButton();
+      } else if (msg.t === 'state') {
+        serverAllowsRemote = !!msg.remote;
+        updateControlButton();
       } else if (msg.t === 'error') {
         loginErr.textContent = msg.msg || '';
         if ((msg.msg || '').indexOf('密码') >= 0) {
@@ -58,6 +63,11 @@
           $('pwd').classList.remove('hidden');
           $('pwdLabel').classList.remove('hidden');
           loginErr.textContent = '服务端要求访问密码，请填写后重试。';
+        } else if ((msg.msg || '').indexOf('远程控制') >= 0) {
+          serverAllowsRemote = false;
+          setControl(false);
+          updateControlButton();
+          detailPill.textContent = msg.msg;
         }
       }
     },
@@ -71,7 +81,45 @@
     onTap: function () { showHud(true); }
   });
 
-  viewer.attachGestures(canvas);
+  viewer.attachGestures(canvas);   // 触摸/鼠标滚轮缩放
+  viewer.attachInput(canvas);      // 鼠标点击/拖动 + 滚轮 + 键盘（远程控制）
+
+  // ---------------- 控制模式 ----------------
+
+  function setControl(on) {
+    viewer.setControl(on);
+    document.body.classList.toggle('control-mode', on);
+    updateControlButton();
+    showHud(true);
+  }
+
+  function updateControlButton() {
+    var btn = $('btnCtrl');
+    if (!btn) return;
+    if (!serverAllowsRemote) {
+      btn.textContent = '控制:不可用';
+      btn.title = '服务端未开启「允许远程控制」（服务端托盘右键 → 设置里打开）';
+      return;
+    }
+    btn.textContent = viewer.isControl() ? '控制:开' : '控制:关';
+    btn.title = viewer.isControl()
+      ? '鼠标点击/拖动/滚轮/键盘都会操作对方电脑，点此关闭'
+      : '点此开启远程控制';
+  }
+
+  $('btnCtrl').addEventListener('click', function (e) {
+    e.stopPropagation();
+    if (!serverAllowsRemote) {
+      detailPill.textContent = '服务端没有开启远程控制（服务端托盘右键 → 设置 → 允许客户端远程控制）';
+      showHud(true);
+      return;
+    }
+    setControl(!viewer.isControl());
+    detailPill.textContent = viewer.isControl()
+      ? '已开启控制：点击/拖动/滚轮/键盘都会发送到对方电脑'
+      : '已关闭控制（仅观看）';
+    showHud(true);
+  });
 
   function sendQuality() {
     var q = qualities[qualityLevel];

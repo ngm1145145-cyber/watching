@@ -20,6 +20,34 @@
   var hudTimer = null;
   var pseudoFull = false;
 
+  // ---------------- 控制模式（服务端允许时才可用）----------------
+
+  var serverAllowsRemote = false;
+  var kbd = $('kbd');
+
+  function setControl(on) {
+    if (!viewer) return;
+    viewer.setControl(on);
+    document.body.classList.toggle('control-mode', on);
+    $('btnKbd').classList.toggle('hidden', !on);
+    if (!on && document.activeElement === kbd) kbd.blur();
+    updateControlButton();
+  }
+
+  function updateControlButton() {
+    var btn = $('btnCtrl');
+    if (!btn) return;
+    if (!serverAllowsRemote) {
+      btn.textContent = '控制:不可用';
+      btn.title = '服务端未开启「允许远程控制」（服务端托盘右键 → 设置里打开）';
+      return;
+    }
+    btn.textContent = (viewer && viewer.isControl()) ? '控制:开' : '控制:关';
+    btn.title = (viewer && viewer.isControl())
+      ? '手指点击/拖动会操作对方电脑，点此关闭'
+      : '点此开启远程控制';
+  }
+
   // ---------------- 登录 ----------------
 
   var saved = null;
@@ -123,18 +151,26 @@
     },
     onMessage: function (msg) {
       if (msg.t === 'welcome') {
+        serverAllowsRemote = !!msg.remote;
         detailPill.textContent = '服务端 ' + (msg.name || '') + ' · ' + (msg.sw || '?') + '×' + (msg.sh || '?') +
-          (msg.remote ? ' · 可远程控制' : '');
+          (msg.remote ? ' · 可远程控制' : ' · 仅观看');
         if (msg.fps) statPill.textContent = '已连接';
+        updateControlButton();
+      } else if (msg.t === 'state') {
+        serverAllowsRemote = !!msg.remote;
+        updateControlButton();
       } else if (msg.t === 'error') {
         loginErr.textContent = msg.msg || '';
         if (msg.msg && msg.msg.indexOf('密码') >= 0) {
           backToLogin();
           showPwdRow(true);
           loginErr.textContent = msg.msg;
+        } else if (msg.msg && msg.msg.indexOf('远程控制') >= 0) {
+          serverAllowsRemote = false;
+          setControl(false);
+          updateControlButton();
+          detailPill.textContent = msg.msg;
         }
-      } else if (msg.t === 'settings') {
-        detailPill.textContent = (detailPill.textContent || '') + '';
       }
     },
     onStats: function (s) {
@@ -145,10 +181,56 @@
       statPill.className = 'pill ok';
     },
     onTap: function () { toggleHud(); },
-    onDoubleTap: function () { toggleFullscreen(); }
+    onDoubleTap: function () {
+      // 控制模式下双击不再切全屏（避免误触），改成连续单击
+      if (viewer.isControl()) return;
+      toggleFullscreen();
+    }
   });
 
-  viewer.attachGestures(canvas);
+  viewer.attachGestures(canvas);   // 触摸：点击/拖动/缩放（控制模式下会转发给服务端）
+  viewer.attachInput(canvas);      // 鼠标/滚轮/键盘（手机外接键盘或电脑浏览器）
+
+  $('btnCtrl').addEventListener('click', function (e) {
+    e.stopPropagation();
+    if (!serverAllowsRemote) {
+      showToast('服务端没有开启远程控制：请在服务端托盘右键 → 设置 → 允许客户端远程控制');
+      return;
+    }
+    setControl(!viewer.isControl());
+    showToast(viewer.isControl() ? '已开启控制：点击/拖动即操作对方电脑' : '已关闭控制（仅观看）');
+  });
+
+  $('btnKbd').addEventListener('click', function (e) {
+    e.stopPropagation();
+    kbd.value = '';
+    kbd.focus();
+    showToast('键盘已就绪，输入会发送到对方电脑（Backspace 可用）');
+  });
+
+  // 软键盘按键转发（用 keydown 以支持退格和回车）
+  kbd.addEventListener('keydown', function (e) {
+    if (!viewer.isControl()) return;
+    if (e.key === 'Unidentified') return;   // 部分安卓输入法给不出按键名
+    var name = viewer.keyName(e);
+    if (!name) return;
+    viewer.sendKey(name, { ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey });
+    e.preventDefault();
+  });
+
+  // 输入法直接上屏的字符（中文/表情等）用 input 事件补发
+  kbd.addEventListener('input', function () {
+    if (!viewer.isControl()) return;
+    var v = kbd.value;
+    if (!v) return;
+    for (var i = 0; i < v.length; i++) viewer.sendKey(v.charAt(i), null);
+    kbd.value = '';
+  });
+
+  function showToast(text) {
+    detailPill.textContent = text;
+    showHud(true);
+  }
 
   function sendQuality() {
     var q = qualities[qualityLevel];

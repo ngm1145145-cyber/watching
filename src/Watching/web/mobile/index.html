@@ -44,6 +44,8 @@
     <div class="hudTop">
       <div class="pill" id="statPill">连接中…</div>
       <div class="spacer"></div>
+      <button id="btnCtrl" class="ghost" title="开启后手指点击/拖动会操作对方电脑">控制:关</button>
+      <button id="btnKbd" class="ghost hidden" title="打字到对方电脑">键盘</button>
       <button id="btnFull" class="ghost" title="全屏">全屏</button>
       <button id="btnFit" class="ghost" title="适应屏幕">适应</button>
       <button id="btnSharp" class="ghost" title="清晰度">画质:中</button>
@@ -56,6 +58,10 @@
       <button id="btnExit" class="ghost danger">断开</button>
     </div>
   </div>
+
+  <!-- 手机软键盘：控制模式下点「键盘」聚焦它，按键会转发给服务端 -->
+  <input id="kbd" type="text" class="kbdcatcher" autocomplete="off" autocorrect="off"
+         autocapitalize="off" spellcheck="false" aria-hidden="true" tabindex="-1" />
 
   <div id="reconnect" class="hidden">连接已断开，正在重连…</div>
 </div>
