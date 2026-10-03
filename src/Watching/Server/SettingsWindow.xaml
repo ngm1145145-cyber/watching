@@ -147,6 +147,8 @@
                                   Content="静止画面跳过重复帧（省流量）" />
                         <CheckBox x:Name="AdaptiveCheck" Margin="0,8,0,0"
                                   Content="网络拥塞时自动降低画质（保证不卡）" />
+                        <CheckBox x:Name="DrawCursorCheck" Margin="0,8,0,0"
+                                  Content="把鼠标光标画进画面（Windows 抓屏默认不含光标，关了客户端就看不到鼠标）" />
                     </StackPanel>
                 </Border>
 

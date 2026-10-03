@@ -41,6 +41,9 @@ public sealed class AppConfig
     /// <summary>网络拥塞时是否自动降画质/帧率（保证流畅不卡）。</summary>
     public bool AdaptiveQuality { get; set; } = true;
 
+    /// <summary>是否把鼠标光标画进画面（Windows 抓屏默认不含光标，不开客户端就看不到鼠标）。</summary>
+    public bool DrawCursor { get; set; } = true;
+
     /// <summary>客户端上次连接的地址（方便下次直接连）。</summary>
     public string LastHost { get; set; }
 

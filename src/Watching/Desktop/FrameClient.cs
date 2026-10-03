@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.WebSockets;
 using System.Text;
@@ -99,6 +101,7 @@ public sealed class FrameClient : IDisposable
 
     public void Close()
     {
+        try { _pumpCts?.Cancel(); } catch { }
         try { _cts?.Cancel(); } catch { }
         try
         {
@@ -121,16 +124,96 @@ public sealed class FrameClient : IDisposable
         Send(new ClientMessage { Type = "quality", Quality = quality, Fps = fps, MaxWidth = maxWidth });
     }
 
+    // ---------------- 输入/控制消息发送 ----------------
+    //
+    // 以前这里是「UI 线程上同步 SendAsync(...).Wait(1000)」：
+    // 鼠标每移动一次就阻塞一次 UI 线程，开启远程控制后客户端立刻卡成幻灯片。
+    // 现在改成后台发送泵 + 合并队列：
+    //   - 鼠标移动只保留最新一个位置（合并），永不让积压
+    //   - 按键/点击这类不能丢的按顺序排在最前面
+    //   - 整个发送过程不再碰 UI 线程
+
+    private readonly ConcurrentQueue<byte[]> _outQueue = new();
+    private byte[] _pendingMove;
+    private readonly object _queueGate = new();
+    private Task _pumpTask;
+    private CancellationTokenSource _pumpCts;
+
     public void Send(ClientMessage msg)
     {
         try
         {
-            var ws = _ws;
-            if (ws == null || ws.State != WebSocketState.Open) return;
+            if (_ws == null || _ws.State != WebSocketState.Open) return;
+
             var bytes = JsonSerializer.SerializeToUtf8Bytes(msg, JsonOpts);
-            ws.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None).Wait(1000);
+
+            // 鼠标移动：只保留最新的，丢中间帧
+            if (string.Equals(msg.Type, "input", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(msg.Kind, "move", StringComparison.OrdinalIgnoreCase))
+            {
+                lock (_queueGate) _pendingMove = bytes;
+                return;
+            }
+
+            _outQueue.Enqueue(bytes);
         }
         catch { }
+    }
+
+    private void StartInputPump(CancellationToken ct)
+    {
+        try { _pumpCts?.Cancel(); } catch { }
+        _pumpCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var token = _pumpCts.Token;
+
+        _pumpTask = Task.Run(async () =>
+        {
+            var batch = new List<byte[]>(16);
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    byte[] move;
+                    lock (_queueGate)
+                    {
+                        move = _pendingMove;
+                        _pendingMove = null;
+                    }
+
+                    batch.Clear();
+                    while (_outQueue.TryDequeue(out var b)) batch.Add(b);
+
+                    var ws = _ws;
+                    if (ws == null || ws.State != WebSocketState.Open)
+                    {
+                        if (batch.Count == 0 && move == null)
+                        {
+                            await Task.Delay(50, token).ConfigureAwait(false);
+                            continue;
+                        }
+                        break;
+                    }
+
+                    foreach (var b in batch)
+                        await ws.SendAsync(b, WebSocketMessageType.Text, true, token).ConfigureAwait(false);
+
+                    if (move != null)
+                        await ws.SendAsync(move, WebSocketMessageType.Text, true, token).ConfigureAwait(false);
+
+                    // 有活干就几乎不等待；空闲时降到 100Hz 轮询，避免空转
+                    if (batch.Count == 0 && move == null)
+                        await Task.Delay(10, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch
+                {
+                    try { await Task.Delay(50, token).ConfigureAwait(false); } catch { break; }
+                }
+            }
+        }, token);
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -160,12 +243,15 @@ public sealed class FrameClient : IDisposable
                 SetState(ClientState.Connected);
                 Common.Log.Write($"客户端已连接 {_host}:{_port}");
 
+                // 启动后台发送泵（输入与画质设置都走它，不再阻塞 UI 线程）
+                StartInputPump(ct);
+
                 Send(new ClientMessage
                 {
                     Type = "hello",
                     Kind = Kind,
                     Name = DisplayName,
-                    Version = "1.0.0"
+                    Version = "1.0.3"
                 });
 
                 _lastStatTick = Environment.TickCount64;

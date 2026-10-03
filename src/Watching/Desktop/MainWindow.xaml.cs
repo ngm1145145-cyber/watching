@@ -252,6 +252,10 @@ public partial class MainWindow : Window
             var server = string.IsNullOrEmpty(msg.MachineName) ? HostBox.Text : msg.MachineName;
             StateText.Text = $"已连接 {server} ({HostBox.Text}:{PortBox.Text})" +
                              (msg.RemoteControl ? " · 可远程控制" : "");
+
+            HintText.Text = msg.RemoteControl
+                ? "远程控制已开启：移动鼠标即可操作对方 · 以管理员身份运行的窗口需要服务端也用管理员启动才能控制 · F11 全屏"
+                : "F11 全屏 · Ctrl+滚轮 缩放 · Esc 退出全屏（远程控制未开启，只能看）";
         }
         else if (msg.Type == "state")
         {

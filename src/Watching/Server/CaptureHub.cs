@@ -26,7 +26,7 @@ public sealed class CaptureStream : IDisposable
     public int Clients => _refs;
     public bool IsIdle => _refs <= 0;
 
-    public CaptureStream(string key, int quality, int fps, int maxWidth, Rectangle crop)
+    public CaptureStream(string key, int quality, int fps, int maxWidth, Rectangle crop, bool drawCursor = true)
     {
         Key = key;
         Quality = quality;
@@ -35,6 +35,7 @@ public sealed class CaptureStream : IDisposable
         Crop = crop;
         _engine = new CaptureEngine(quality, fps, maxWidth);
         _engine.SetCrop(crop);
+        _engine.SetDrawCursor(drawCursor);
         _engine.Start();
     }
 
@@ -88,15 +89,28 @@ public sealed class CaptureHub : IDisposable
     public CaptureStream Acquire(int quality, int fps, int maxWidth, Rectangle crop)
     {
         var key = MakeKey(quality, fps, maxWidth, crop);
-        var stream = _streams.GetOrAdd(key, _ => new CaptureStream(key, quality, fps, maxWidth, crop));
+        var stream = _streams.GetOrAdd(key, _ => new CaptureStream(key, quality, fps, maxWidth, crop, DrawCursor));
         stream.Acquire();
         return stream;
     }
+
+    /// <summary>新建抓屏流时是否绘制光标（由设置决定）。</summary>
+    public bool DrawCursor { get; set; } = true;
 
     public void Release(CaptureStream stream)
     {
         if (stream == null) return;
         stream.Release();
+    }
+
+    /// <summary>把「是否绘制光标」应用到所有正在运行的抓屏流。</summary>
+    public void ApplyDrawCursor(bool enabled)
+    {
+        DrawCursor = enabled;
+        foreach (var s in _streams.Values)
+        {
+            try { s.Engine.SetDrawCursor(enabled); } catch { }
+        }
     }
 
     public bool IsEmpty => _streams.IsEmpty;

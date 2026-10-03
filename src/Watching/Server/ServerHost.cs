@@ -51,6 +51,7 @@ public sealed class ServerHost : IDisposable
         _fps = config.Fps;
         _maxWidth = config.MaxWidth;
         _remote = config.RemoteControlEnabled;
+        _hub.DrawCursor = config.DrawCursor;
         _net = new NetServer(config, _hub, this);
     }
 
@@ -165,7 +166,8 @@ public sealed class ServerHost : IDisposable
     // ---------------- 设置 ----------------
 
     /// <summary>更新全局设置并广播给所有客户端（不会写入 config.json，由调用方决定）。</summary>
-    public void ApplySettings(int? quality = null, int? fps = null, int? maxWidth = null, bool? remote = null, bool save = true)
+    public void ApplySettings(int? quality = null, int? fps = null, int? maxWidth = null,
+        bool? remote = null, bool? drawCursor = null, bool save = true)
     {
         lock (_settingsGate)
         {
@@ -178,7 +180,10 @@ public sealed class ServerHost : IDisposable
             _config.Fps = _fps;
             _config.MaxWidth = _maxWidth;
             _config.RemoteControlEnabled = _remote;
+            if (drawCursor.HasValue) _config.DrawCursor = drawCursor.Value;
         }
+
+        if (drawCursor.HasValue) _hub.ApplyDrawCursor(drawCursor.Value);
 
         if (save) _config.Save();
 

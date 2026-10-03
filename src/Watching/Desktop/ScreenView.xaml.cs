@@ -258,6 +258,9 @@ public partial class ScreenView : UserControl
         return true;
     }
 
+    private long _lastMoveSentTick;
+    private double _lastMoveX = -1, _lastMoveY = -1;
+
     private void OnImageMouseMove(object sender, MouseEventArgs e)
     {
         var p = e.GetPosition(this);
@@ -268,8 +271,25 @@ public partial class ScreenView : UserControl
             return;
         }
 
-        if (AllowRemoteInput && TryMapPoint(p, out var nx, out var ny))
-            _client?.Send(new ClientMessage { Type = "input", Kind = "move", X = Math.Round(nx, 4), Y = Math.Round(ny, 4) });
+        if (!AllowRemoteInput) return;
+        if (!TryMapPoint(p, out var nx, out var ny)) return;
+
+        // 限流到 50Hz，并且位置没实质变化就不发（鼠标事件本身可能几百 Hz）
+        long now = Environment.TickCount64;
+        if (now - _lastMoveSentTick < 20) return;
+        if (Math.Abs(nx - _lastMoveX) < 0.0008 && Math.Abs(ny - _lastMoveY) < 0.0008) return;
+
+        _lastMoveSentTick = now;
+        _lastMoveX = nx;
+        _lastMoveY = ny;
+
+        _client?.Send(new ClientMessage
+        {
+            Type = "input",
+            Kind = "move",
+            X = Math.Round(nx, 4),
+            Y = Math.Round(ny, 4)
+        });
     }
 
     private void OnImageMouseDown(object sender, MouseButtonEventArgs e)

@@ -104,6 +104,13 @@ public sealed class CaptureEngine : IDisposable
         _signal.Set();
     }
 
+    /// <summary>是否把鼠标光标画进画面。</summary>
+    public void SetDrawCursor(bool enabled)
+    {
+        lock (_gate) _encoder.DrawCursorEnabled = enabled;
+        _forceKeyFrame = true;
+    }
+
     public bool TryGetLatest(out byte[] jpeg, out long seq, out int w, out int h, out bool cropped)
     {
         jpeg = _latest;
@@ -194,6 +201,7 @@ public sealed class CaptureEngine : IDisposable
 
         // 分块增量：标出哪些块变了（真正发什么由每个客户端决定）
         DeltaResult delta = null;
+        var deltaWatch = Stopwatch.StartNew();
         try
         {
             delta = _delta.Process(_encoder.LastFrameBitmap, _quality, _forceKeyFrame,
@@ -203,6 +211,8 @@ public sealed class CaptureEngine : IDisposable
         {
             Log.Error("增量编码失败（本帧将退化为整帧）", ex);
         }
+        deltaWatch.Stop();
+        _lastDeltaMs = deltaWatch.Elapsed.TotalMilliseconds;
 
         var vs = ScreenEncoder.VirtualScreenBounds();
 
@@ -242,6 +252,11 @@ public sealed class CaptureEngine : IDisposable
 
     /// <summary>增量编码的累计统计（用于对比省了多少流量）。</summary>
     public DeltaEncoder DeltaStats => _delta;
+
+    /// <summary>最近一次分块比对耗时（毫秒）。</summary>
+    public double LastDeltaMs => _lastDeltaMs;
+
+    private double _lastDeltaMs;
 
     /// <summary>取最新一帧的「可发送内容」（整帧或若干变化分块）。</summary>
     public bool TryGetLatestDelta(out DeltaResult delta, out long seq, out int w, out int h)

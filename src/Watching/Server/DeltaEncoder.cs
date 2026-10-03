@@ -290,10 +290,12 @@ public sealed class DeltaEncoder : IDisposable
         long diff = 0;
         int samples = 0;
 
-        for (int y = rect.Top; y < rect.Bottom; y += 2)
+        // 每 4 行 / 每 4 像素取样：128x128 的块约 1k 次取样，
+        // 足以发现光标（32x32）级别的变化，又比逐像素快 16 倍。
+        for (int y = rect.Top; y < rect.Bottom; y += 4)
         {
             int rowBase = y * imageWidth * 4;
-            for (int x = rect.Left; x < rect.Right; x += 2)
+            for (int x = rect.Left; x < rect.Right; x += 4)
             {
                 int i = rowBase + x * 4;
                 diff += Math.Abs(cur[i] - prev[i]);

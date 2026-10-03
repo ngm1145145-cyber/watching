@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -242,7 +242,8 @@ public sealed class ClientConnection : IDisposable
                         _lastLogTick = now;
                         Log.Write($"[传输] {Id} 已发 {_framesSent} 帧（整帧 {_fullFramesSent} / 增量 {_deltaFramesSent}，" +
                                   $"分块 {_tilesSent} 个）/ 跳过 {_framesSkipped} 帧 · 丢掉重复帧 {_framesDropped}" +
-                                  $" · 当前 {_kbps:F0} KB/s · 单帧发送 {_sendMs:F0}ms · 画质 {effectiveQuality}" +
+                                  $" · 当前 {_kbps:F0} KB/s · 单帧发送 {_sendMs:F0}ms · 抓屏 {stream.Engine.LastCaptureMs:F0}ms" +
+                                  $" · 分块比对 {stream.Engine.LastDeltaMs:F0}ms · 画质 {effectiveQuality}" +
                                   ReportDeltaSaving(stream));
                     }
                 }
@@ -464,7 +465,7 @@ public sealed class ClientConnection : IDisposable
                     MaxWidth = _maxWidth,
                     RemoteControl = _host.RemoteControlEnabled,
                     MachineName = Environment.MachineName,
-                    Version = "1.0.3"
+                    Version = "1.0.4"
                 });
                 _host.OnClientSettingsChanged(this);
                 break;

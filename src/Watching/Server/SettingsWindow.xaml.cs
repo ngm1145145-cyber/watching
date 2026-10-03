@@ -35,6 +35,7 @@ public partial class SettingsWindow : Window
         DiscoveryCheck.IsChecked = config.DiscoveryEnabled;
         SkipUnchangedCheck.IsChecked = config.SkipUnchangedFrames;
         AdaptiveCheck.IsChecked = config.AdaptiveQuality;
+        DrawCursorCheck.IsChecked = config.DrawCursor;
 
         UpdatePasswordState();
         UpdateSubtitle();
@@ -260,6 +261,7 @@ public partial class SettingsWindow : Window
         _config.DiscoveryEnabled = DiscoveryCheck.IsChecked == true;
         _config.SkipUnchangedFrames = SkipUnchangedCheck.IsChecked == true;
         _config.AdaptiveQuality = AdaptiveCheck.IsChecked == true;
+        _config.DrawCursor = DrawCursorCheck.IsChecked == true;
 
         if (AutoStartCheck.IsChecked == true)
         {
@@ -278,7 +280,7 @@ public partial class SettingsWindow : Window
         _accessBackup = _config.AccessPassword;
 
         _host.ApplySettings(_config.Quality, _config.Fps, _config.MaxWidth <= 0 ? 0 : _config.MaxWidth,
-            _config.RemoteControlEnabled);
+            _config.RemoteControlEnabled, _config.DrawCursor);
         _config.Save();
 
         Log.Write($"设置已保存：远程控制={_config.RemoteControlEnabled}，访问密码={_config.AccessControlActive}，" +

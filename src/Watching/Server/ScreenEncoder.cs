@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using Watching.Common;
 
 namespace Watching.Server;
 
@@ -118,23 +119,17 @@ public sealed class ScreenEncoder : IDisposable
             outW = _outW;
             outH = _outH;
             LastFrameBitmap = _fullBmp;
+            DrawCursor(_fullBmp, crop, crop.Width, crop.Height);
             return Encode(_fullBmp, crop.Width, crop.Height);
         }
 
-        if (targetW == crop.Width && targetH == crop.Height)
-        {
-            _outGfx.DrawImage(_fullBmp,
-                new Rectangle(0, 0, targetW, targetH),
-                new Rectangle(0, 0, crop.Width, crop.Height),
-                GraphicsUnit.Pixel);
-        }
-        else
-        {
-            _outGfx.DrawImage(_fullBmp,
-                new Rectangle(0, 0, targetW, targetH),
-                new Rectangle(0, 0, crop.Width, crop.Height),
-                GraphicsUnit.Pixel);
-        }
+        _outGfx.DrawImage(_fullBmp,
+            new Rectangle(0, 0, targetW, targetH),
+            new Rectangle(0, 0, crop.Width, crop.Height),
+            GraphicsUnit.Pixel);
+
+        // 光标画在缩放后的位图上，客户端就能看到鼠标了
+        DrawCursor(_outBmp, crop, targetW, targetH);
 
         outW = targetW;
         outH = targetH;
@@ -168,6 +163,67 @@ public sealed class ScreenEncoder : IDisposable
         _outW = -1;
         _outH = -1;
     }
+
+    /// <summary>
+    /// 把鼠标光标画到输出位图上。
+    ///
+    /// Windows 的 BitBlt 抓屏**不包含光标**，所以客户端看不到鼠标 —— 这会让远程操作
+    /// 完全没法用（不知道点在哪）。这里用 GetCursorInfo + DrawIconEx 手动补上。
+    /// 画在「缩放后」的位图上，并按比例换算坐标。
+    /// </summary>
+    private void DrawCursor(Bitmap target, Rectangle crop, int targetW, int targetH)
+    {
+        if (!_drawCursor) return;
+        if (targetW <= 0 || targetH <= 0 || crop.Width <= 0 || crop.Height <= 0) return;
+
+        var ci = new User32.CURSORINFO();
+        ci.cbSize = System.Runtime.InteropServices.Marshal.SizeOf<User32.CURSORINFO>();
+        if (!User32.GetCursorInfo(ref ci)) return;
+        if ((ci.flags & User32.CURSOR_SHOWING) == 0) return;
+        if (ci.hCursor == IntPtr.Zero) return;
+
+        int cx = ci.ptScreenPosX, cy = ci.ptScreenPosY;
+        if (cx < crop.Left || cx > crop.Right || cy < crop.Top || cy > crop.Bottom) return;
+
+        // 热点偏移：让光标的「尖」对准真实位置
+        int hotX = 0, hotY = 0;
+        if (User32.GetIconInfo(ci.hCursor, out var ii))
+        {
+            hotX = ii.xHotspot;
+            hotY = ii.yHotspot;
+            if (ii.hbmColor != IntPtr.Zero) User32.DeleteObject(ii.hbmColor);
+            if (ii.hbmMask != IntPtr.Zero) User32.DeleteObject(ii.hbmMask);
+        }
+
+        double scale = targetW / (double)crop.Width;
+        int dx = (int)Math.Round((cx - crop.Left) * scale) - (int)Math.Round(hotX * scale);
+        int dy = (int)Math.Round((cy - crop.Top) * scale) - (int)Math.Round(hotY * scale);
+
+        int iconW = (int)Math.Round(32 * scale);
+        int iconH = (int)Math.Round(32 * scale);
+        if (iconW < 8) iconW = 8;
+        if (iconH < 8) iconH = 8;
+
+        using var g = Graphics.FromImage(target);
+        IntPtr hdc = g.GetHdc();
+        try
+        {
+            User32.DrawIconEx(hdc, dx, dy, ci.hCursor, iconW, iconH, 0, IntPtr.Zero, User32.DI_NORMAL);
+        }
+        finally
+        {
+            g.ReleaseHdc(hdc);
+        }
+    }
+
+    /// <summary>是否把鼠标光标画进画面（默认开）。</summary>
+    public bool DrawCursorEnabled
+    {
+        get => _drawCursor;
+        set => _drawCursor = value;
+    }
+
+    private bool _drawCursor = true;
 
     private void EnsureOutputBuffer(int w, int h, bool canReuseFull)
     {
