@@ -1,4 +1,4 @@
-# Watching · 局域网远程屏幕查看
+﻿# Watching · 局域网远程屏幕查看
 
 <p align="center">
   <b>一个自己写的局域网看屏工具：电脑服务端静默抓屏，手机 / 电脑客户端按 IP 连上去看。</b><br />
@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
 | `Watching-win-x64-framework.zip` | 0.16 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
-| `WatchingMobile-1.0.2.apk` | 39.4 MB | 安卓手机 |
+| `WatchingMobile-1.0.3.apk` | 39.4 MB | 安卓手机 |
 
 > 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
 > `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
@@ -169,8 +169,8 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 
 ### 3️⃣ 在 B（手机）上看
 
-**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.2.apk` 传到手机安装
-（或数据线连上后 `adb install -r WatchingMobile-1.0.2.apk`）。
+**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.3.apk` 传到手机安装
+（或数据线连上后 `adb install -r WatchingMobile-1.0.3.apk`）。
 打开 App → 填 `192.168.1.8` 和端口 `8899` → 「开始观看」。
 
 **方式二：用浏览器** —— 手机浏览器打开 `http://192.168.1.8:8899/` → 「开始观看」，免安装。
@@ -316,12 +316,12 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 `
     -SdkDir "D:\android-sdk" -JdkDir "C:\Program Files\Eclipse Adoptium\jdk-17"
 ```
 
-产物：`dist\apk\WatchingMobile-1.0.2.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
+产物：`dist\apk\WatchingMobile-1.0.3.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
 
 安装：
 
 ```bash
-adb install -r dist/apk/WatchingMobile-1.0.2.apk
+adb install -r dist/apk/WatchingMobile-1.0.3.apk
 ```
 
 > 首次编译安卓端需要 `.NET android` 工作负载：`dotnet workload install android`。
@@ -346,17 +346,33 @@ adb install -r dist/apk/WatchingMobile-1.0.2.apk
 
 ### 帧格式
 
-每一帧就是一条 WebSocket 二进制消息，自描述头 + JPEG：
+每一帧就是一条 WebSocket 二进制消息，前 268 字节是自描述头，后面是内容。
+`mode` 字段区分两种帧：
+
+**整帧（`mode = "full"`）**
 
 ```text
 偏移   长度    内容
 0      4      魔数 "WF01"
 4      8      帧序号（小端 int64，客户端据此判断是否新帧）
 12     256    JSON 元数据（不足补 \0）
-              {"w":宽,"h":高,"sw":屏幕宽,"sh":屏幕高,"q":画质,
-               "crop":是否裁剪,"ts":时间戳,"mode":"gdi","capMs":抓屏耗时}
-268    剩余   JPEG 数据
+              {"w":宽,"h":高,"sw":屏幕宽,"sh":屏幕高,"q":画质,"crop":是否裁剪,
+               "ts":时间戳,"mode":"full","capMs":抓屏耗时,"tile":128,"tx":11,"ty":6}
+268    剩余   整帧 JPEG
 ```
+
+**增量帧（`mode = "delta"`）—— 只含上一次之后变化的分块**
+
+```text
+偏移   长度        内容
+0      268        同上（mode = "delta"）
+268    4          分块表魔数 "DT01"
+272    4          分块数 n（小端 int32）
+276    n × 8      每个分块：x(2 字节大端) + y(2 字节大端) + JPEG长度(4 字节小端)
+276+8n 剩余       n 个分块 JPEG 依次排列
+```
+
+客户端拿到增量帧后，把每个分块 JPEG 解码并贴到上一帧对应坐标上，就得到完整画面。
 
 控制消息是 WebSocket 文本帧 JSON，`t` 字段区分类型：
 `hello` / `welcome` / `quality` / `crop` / `input` / `state` / `ping` / `pong` / `error`。
@@ -368,19 +384,52 @@ adb install -r dist/apk/WatchingMobile-1.0.2.apk
    ↓
 CaptureHub 按 (画质, 帧率, 宽度, 裁剪区域) 分配一条抓屏流
    ↓
-抓屏线程：GDI BitBlt（32bpp 缓冲）→ 缩放 → 系统 JPEG 编码器 → 放入「最新帧」槽位
+抓屏线程：GDI BitBlt（32bpp 缓冲）→ 缩放 → 系统 JPEG 编码器
    ↓
-每个客户端一条发送线程：读最新帧 → 打上帧头 → 推送（跟不上就丢帧）
+分块增量编码：画面切成 128×128 的块，逐块和上一帧比（带噪声容差），
+             只把变化的块编码成小 JPEG；变化过大或到关键帧周期时发整帧
+   ↓
+每个客户端一条发送线程：取最新的可发送内容 → 推送（跟不上就丢帧）
    ↓
 最后一个客户端断开 → 抓屏线程退出 → 抓屏流被回收，服务端回到零开销
 ```
 
-几个设计要点：
+### 分块增量传输（更小流量 + 更流畅）
 
-- **只发最新帧**：慢的客户端只会掉帧，不会让服务端内存堆积。
-- **多客户端共享**：请求完全相同画面的客户端会复用同一条抓屏流。
-- **独立画质**：每个客户端可以有自己的画质/宽度/裁剪，互不干扰。
-- **编码复用**：位图与编码参数对象全部复用，不产生大对象垃圾。
+整帧发送时，哪怕只动了一个鼠标指针也要把整屏 JPEG 传一遍。所以服务端改成**只传变化的分块**：
+
+| | 整帧方案 | 分块增量 |
+| --- | --- | --- |
+| 静止桌面 | 每帧照发（或靠整帧去重跳过） | **一帧都不发** |
+| 移动鼠标 / 打字 | 发整屏 | 只发变化的 1~3 块 |
+| 客户端解码量 | 每帧解码整屏 | 只解码变化的小块 |
+| 实测：1366×768，只有 3/66 块变化 | 83.6 KB/帧 | **5.8 KB/帧（省 93%）** |
+| 实测：连续 100 帧各改一小块 | 8.2 MB | **0.1 MB（省 98%）** |
+| 实测：真实桌面（在放视频，变化剧烈） | — | **省 72%** |
+
+实现要点：
+
+- **分块比较带噪声容差**：块内平均像素差 ≤3 就算没变。用精确哈希会被渲染噪声骗到，
+  每块都判成「变了」，增量就永远不触发（开发中踩过这个坑）。
+- **关键帧回退**：首次、画面尺寸变化、变化面积超过 45%、或每 150 帧都会发整帧，
+  保证客户端随时能重建完整画面。
+- **零变化帧直接省略**：一块都没变时连帧序号都不递增，客户端不会收到空帧。
+- **改画质/尺寸后自动补关键帧**，否则客户端拼出来的画面是花的。
+- 三端客户端都做**分块合成**：WPF 用 `WriteableBitmap.WritePixels`，网页用离屏 `canvas`，
+  安卓用可变 `Bitmap` + `Canvas`，都只在变化区域上绘制。
+
+配合其它优化，整体效果：
+
+| 优化 | 作用 |
+| --- | --- |
+| 分块增量 | 只传变化区域（省 70%~98%） |
+| 静止帧跳过 | 完全没变化时一帧都不发 |
+| 只发最新帧 | 客户端跟不上就丢旧帧，永不积压 |
+| 拥塞自适应 | 单帧发送耗时超标 → 自动降画质，恢复后升回 |
+| 直写 socket | 不再每帧拼接大数组，单帧发送 0~1ms |
+| Socket 调优 | NoDelay / 256KB 发送缓冲 / KeepAlive |
+| 独立画质 | 每个客户端可单独选 流畅 / 中 / 高清 |
+| 多客户端共享 | 请求相同画面的客户端复用同一条抓屏流 |
 
 ### 为什么服务端「不显示任何东西」
 
@@ -454,7 +503,7 @@ watching/
 │   ├─ serve-static.mjs         本地预览 docs/ 落地页的极简静态服务器
 │   └─ ProtocolCheck/           复用安卓 App 的网络源码，在 Windows 上验证协议
 └─ dist/                        构建产物（未提交到仓库，见 .gitignore）
-    ├─ apk/WatchingMobile-1.0.2.apk
+    ├─ apk/WatchingMobile-1.0.3.apk
     ├─ Watching-win-x64-selfcontained/
     └─ Watching-win-x64-framework/
 ```

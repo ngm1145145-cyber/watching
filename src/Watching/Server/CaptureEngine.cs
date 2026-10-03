@@ -23,10 +23,14 @@ public sealed class CaptureEngine : IDisposable
 
     private int _fps = 20;
     private int _maxWidth = 1600;
+    private int _quality = 70;
     private Rectangle _crop = Rectangle.Empty;
 
     private byte[] _latest;
+    private DeltaResult _latestDelta;
     private long _seq;
+    private volatile bool _forceKeyFrame = true;
+    private readonly DeltaEncoder _delta = new();
     private int _frameW, _frameH, _screenW, _screenH;
     private double _fpsMeasured;
     private long _lastFpsTick;
@@ -37,7 +41,9 @@ public sealed class CaptureEngine : IDisposable
     {
         _fps = fps;
         _maxWidth = maxWidth;
+        _quality = quality;
         _encoder = new ScreenEncoder(quality);
+        DeltaEncoder.ApplyEnvOverrides(_delta);
     }
 
     public long Sequence => Interlocked.Read(ref _seq);
@@ -75,7 +81,9 @@ public sealed class CaptureEngine : IDisposable
 
     public void SetQuality(int q)
     {
-        lock (_gate) _encoder.SetQuality(q);
+        _quality = Math.Clamp(q, 20, 95);
+        lock (_gate) _encoder.SetQuality(_quality);
+        _forceKeyFrame = true;   // 画质变了必须重发整帧
     }
 
     public void SetFps(int f)
@@ -184,11 +192,40 @@ public sealed class CaptureEngine : IDisposable
         }
         sw.Stop();
 
+        // 分块增量：标出哪些块变了（真正发什么由每个客户端决定）
+        DeltaResult delta = null;
+        try
+        {
+            delta = _delta.Process(_encoder.LastFrameBitmap, _quality, _forceKeyFrame,
+                _encoder.JpegCodec, _encoder.JpegParams);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("增量编码失败（本帧将退化为整帧）", ex);
+        }
+
         var vs = ScreenEncoder.VirtualScreenBounds();
+
+        // 画面完全没变化（增量帧且零个块变了）时既不递增序号也不通知客户端，
+        // 客户端因此不会收到空帧、也不会误以为有新内容 —— 这就是静态桌面几乎零流量的关键。
+        if (delta != null && !delta.IsFullFrame && delta.Tiles.Count == 0)
+        {
+            lock (_gate)
+            {
+                _frameW = w;
+                _frameH = h;
+                _screenW = vs.Width;
+                _screenH = vs.Height;
+                _lastCaptureMs = sw.Elapsed.TotalMilliseconds;
+            }
+            _forceKeyFrame = false;
+            return;
+        }
 
         lock (_gate)
         {
             _latest = data;
+            _latestDelta = delta;
             _frameW = w;
             _frameH = h;
             _screenW = vs.Width;
@@ -196,7 +233,24 @@ public sealed class CaptureEngine : IDisposable
             _lastCaptureMs = sw.Elapsed.TotalMilliseconds;
             Interlocked.Increment(ref _seq);
         }
+        _forceKeyFrame = false;
         _signal.Set();
+    }
+
+    /// <summary>请求下一次抓屏输出整帧（新客户端接入、改过画质、布局变化等）。</summary>
+    public void RequestKeyFrame() => _forceKeyFrame = true;
+
+    /// <summary>增量编码的累计统计（用于对比省了多少流量）。</summary>
+    public DeltaEncoder DeltaStats => _delta;
+
+    /// <summary>取最新一帧的「可发送内容」（整帧或若干变化分块）。</summary>
+    public bool TryGetLatestDelta(out DeltaResult delta, out long seq, out int w, out int h)
+    {
+        delta = _latestDelta;
+        seq = Interlocked.Read(ref _seq);
+        w = _frameW;
+        h = _frameH;
+        return delta != null;
     }
 
     public void Dispose()
@@ -204,6 +258,7 @@ public sealed class CaptureEngine : IDisposable
         _running = false;
         _signal.Set();
         try { _thread?.Join(1500); } catch { }
+        try { _delta.Dispose(); } catch { }
         try { _encoder.Dispose(); } catch { }
         try { _signal.Dispose(); } catch { }
     }

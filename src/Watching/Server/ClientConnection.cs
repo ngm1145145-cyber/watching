@@ -122,10 +122,12 @@ public sealed class ClientConnection : IDisposable
     private async Task SendLoopAsync()
     {
         var pingClock = Stopwatch.StartNew();
-        var header = new byte[FramePacket.HeaderSize];
         bool adaptive = _config.AdaptiveQuality;
         int effectiveQuality = _quality;
         int effectiveFps = _fps;
+
+        // 刚接入：要求下一次抓屏给整帧，否则客户端没有基准画面可拼
+        Volatile.Read(ref _streamRef)?.Engine.RequestKeyFrame();
 
         try
         {
@@ -160,7 +162,7 @@ public sealed class ClientConnection : IDisposable
                     continue;
                 }
 
-                // 4) 取最新一帧（客户端跟不上就自动丢帧）
+                // 4) 取最新一帧的可发送内容（整帧 或 只含变化分块的增量）
                 long seq = stream.Engine.Sequence;
                 if (seq == _lastSentSeq || !stream.Engine.Active)
                 {
@@ -168,8 +170,8 @@ public sealed class ClientConnection : IDisposable
                     continue;
                 }
 
-                if (!stream.Engine.TryGetLatest(out var jpeg, out seq, out int w, out int h, out bool cropped)
-                    || jpeg == null)
+                if (!stream.Engine.TryGetLatestDelta(out var delta, out seq, out int w, out int h)
+                    || delta == null)
                 {
                     await Task.Delay(20, _cts.Token).ConfigureAwait(false);
                     continue;
@@ -178,51 +180,51 @@ public sealed class ClientConnection : IDisposable
                 if (seq == _lastSentSeq) continue;
                 if (_lastSentSeq >= 0 && seq - _lastSentSeq > Math.Max(3, _fps)) _framesDropped++;
 
-                // 5) 静止画面跳过：和上一帧字节完全一致就不发（省流量）
-                if (_config.SkipUnchangedFrames && jpeg.Length == _lastFrameLength && jpeg.Length > 0)
+                byte[] packet;
+
+                if (delta.IsFullFrame)
                 {
-                    ulong hash = Hash64(jpeg);
-                    if (hash == _lastFrameHash)
+                    // 5a) 关键帧：整帧字节没变就不发（静止桌面省流量）
+                    var jpeg = delta.FullJpeg;
+                    if (_config.SkipUnchangedFrames && jpeg.Length == _lastFrameLength && jpeg.Length > 0 &&
+                        Hash64(jpeg) == _lastFrameHash)
                     {
                         _framesSkipped++;
                         _lastSentSeq = seq;
                         continue;
                     }
-                    _lastFrameHash = hash;
+                    _lastFrameLength = jpeg.Length;
+                    if (_config.SkipUnchangedFrames) _lastFrameHash = Hash64(jpeg);
+
+                    packet = BuildFullFramePacket(seq, delta, effectiveQuality, stream, w, h);
+                    _fullFramesSent++;
                 }
                 else
                 {
-                    _lastFrameLength = jpeg.Length;
-                    if (_config.SkipUnchangedFrames) _lastFrameHash = Hash64(jpeg);
+                    // 5b) 增量帧：只带变化的分块
+                    packet = BuildDeltaPacket(seq, delta, effectiveQuality, stream, w, h);
+                    if (packet != null)
+                    {
+                        _deltaFramesSent++;
+                        _tilesSent += delta.Tiles.Count;
+                    }
                 }
 
-                _lastSentSeq = seq;
-
-                var meta = new FramePacket.Meta
-                {
-                    w = w,
-                    h = h,
-                    sw = stream.Engine.ScreenWidth,
-                    sh = stream.Engine.ScreenHeight,
-                    q = effectiveQuality,
-                    crop = cropped,
-                    ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    mode = "gdi",
-                    capMs = Math.Round(stream.Engine.LastCaptureMs, 1)
-                };
-
-                if (!FramePacket.WriteMetaHeader(header, seq, meta))
+                if (packet == null)
                 {
                     await Task.Delay(20, _cts.Token).ConfigureAwait(false);
                     continue;
                 }
 
+                _lastSentSeq = seq;
+
                 var sendWatch = Stopwatch.StartNew();
-                await WebSocketProtocol.WritePacketAsync(_stream, jpeg, header, _cts.Token).ConfigureAwait(false);
+                await WebSocketProtocol.WriteFrameAsync(_stream, packet, WebSocketProtocol.OpBinary, _cts.Token)
+                    .ConfigureAwait(false);
                 sendWatch.Stop();
 
                 _framesSent++;
-                _bytesInWindow += jpeg.Length + header.Length;
+                _bytesInWindow += packet.Length;
 
                 long now = Environment.TickCount64;
                 if (_statTick == 0) _statTick = now;
@@ -238,9 +240,10 @@ public sealed class ClientConnection : IDisposable
                     if (watch >= 30000)
                     {
                         _lastLogTick = now;
-                        Log.Write($"[传输] {Id} 已发 {_framesSent} 帧 / 跳过 {_framesSkipped} 帧" +
-                                  $"（静止画面省流量）· 丢帧 {_framesDropped} · 当前 {_kbps:F0} KB/s" +
-                                  $" · 单帧发送 {_sendMs:F0}ms · 画质 {effectiveQuality}");
+                        Log.Write($"[传输] {Id} 已发 {_framesSent} 帧（整帧 {_fullFramesSent} / 增量 {_deltaFramesSent}，" +
+                                  $"分块 {_tilesSent} 个）/ 跳过 {_framesSkipped} 帧 · 丢掉重复帧 {_framesDropped}" +
+                                  $" · 当前 {_kbps:F0} KB/s · 单帧发送 {_sendMs:F0}ms · 画质 {effectiveQuality}" +
+                                  ReportDeltaSaving(stream));
                     }
                 }
 
@@ -255,12 +258,14 @@ public sealed class ClientConnection : IDisposable
                     {
                         effectiveQuality = Math.Max(40, effectiveQuality - 8);
                         engine.SetQuality(effectiveQuality);
+                        engine.RequestKeyFrame();   // 画质变了要重发整帧，否则拼出来的画面是花的
                         Log.Write($"链路拥塞（发送 {_sendMs:F0}ms）→ 自动降画质到 {effectiveQuality}");
                     }
                     else if (_sendMs < targetFrameMs * 0.35 && effectiveQuality < _quality)
                     {
                         effectiveQuality = Math.Min(_quality, effectiveQuality + 4);
                         engine.SetQuality(effectiveQuality);
+                        engine.RequestKeyFrame();
                     }
                 }
             }
@@ -275,9 +280,29 @@ public sealed class ClientConnection : IDisposable
         }
     }
 
+    /// <summary>把「增量 vs 全发整帧」的对比写进统计日志，方便确认优化效果。</summary>
+    private static string ReportDeltaSaving(CaptureStream stream)
+    {
+        try
+        {
+            var d = stream.Engine.DeltaStats;
+            if (d == null || d.BaselineBytes <= 0) return "";
+
+            double saved = 1.0 - d.SentBytes / (double)d.BaselineBytes;
+            return $" · 增量省流量 {saved:P0}（实际 {(d.SentBytes / 1024.0):F0}KB / 若全发整帧 {(d.BaselineBytes / 1024.0):F0}KB）";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
     private long _lastFrameLength = -1;
     private ulong _lastFrameHash;
     private long _framesSkipped;
+    private long _fullFramesSent;
+    private long _deltaFramesSent;
+    private long _tilesSent;
     private double _sendMs;
     private long _lastLogTick = Environment.TickCount64;
 
@@ -291,6 +316,91 @@ public sealed class ClientConnection : IDisposable
             h *= 1099511628211UL;
         }
         return h;
+    }
+
+    /// <summary>整帧包：WF01 头 + JPEG（mode = "full"）。</summary>
+    private static byte[] BuildFullFramePacket(long seq, DeltaResult delta, int quality,
+        CaptureStream stream, int w, int h)
+    {
+        var jpeg = delta.FullJpeg;
+        var meta = new FramePacket.Meta
+        {
+            w = w, h = h,
+            sw = stream.Engine.ScreenWidth, sh = stream.Engine.ScreenHeight,
+            q = quality,
+            crop = !stream.Engine.Crop.IsEmpty,
+            ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            mode = "full",
+            capMs = Math.Round(stream.Engine.LastCaptureMs, 1),
+            tile = delta.TileSize,
+            tx = delta.TilesX,
+            ty = delta.TilesY
+        };
+
+        var header = new byte[FramePacket.HeaderSize];
+        if (!FramePacket.WriteMetaHeader(header, seq, meta)) return null;
+
+        var packet = new byte[FramePacket.HeaderSize + jpeg.Length];
+        Buffer.BlockCopy(header, 0, packet, 0, FramePacket.HeaderSize);
+        Buffer.BlockCopy(jpeg, 0, packet, FramePacket.HeaderSize, jpeg.Length);
+        return packet;
+    }
+
+    /// <summary>增量包：WF01 头 + 分块表 + 各分块 JPEG（mode = "delta"）。</summary>
+    private static byte[] BuildDeltaPacket(long seq, DeltaResult delta, int quality,
+        CaptureStream stream, int w, int h)
+    {
+        var meta = new FramePacket.Meta
+        {
+            w = w, h = h,
+            sw = stream.Engine.ScreenWidth, sh = stream.Engine.ScreenHeight,
+            q = quality,
+            crop = !stream.Engine.Crop.IsEmpty,
+            ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            mode = "delta",
+            capMs = Math.Round(stream.Engine.LastCaptureMs, 1),
+            tile = delta.TileSize,
+            tx = delta.TilesX,
+            ty = delta.TilesY
+        };
+
+        var header = new byte[FramePacket.HeaderSize];
+        if (!FramePacket.WriteMetaHeader(header, seq, meta)) return null;
+
+        int tileHeader = FramePacket.TileTableHeader + delta.Tiles.Count * FramePacket.TileEntrySize;
+        int total = FramePacket.HeaderSize + tileHeader;
+        foreach (var t in delta.Tiles) total += t.Jpeg.Length;
+
+        var packet = new byte[total];
+        Buffer.BlockCopy(header, 0, packet, 0, FramePacket.HeaderSize);
+
+        int p = FramePacket.HeaderSize;
+        packet[p] = (byte)'D'; packet[p + 1] = (byte)'T';
+        packet[p + 2] = (byte)'0'; packet[p + 3] = (byte)'1';
+        p += 4;
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(packet.AsSpan(p, 4), delta.Tiles.Count);
+        p += 4;
+
+        foreach (var t in delta.Tiles)
+        {
+            packet[p] = (byte)(t.X >> 8);
+            packet[p + 1] = (byte)(t.X & 0xFF);
+            packet[p + 2] = (byte)(t.Y >> 8);
+            packet[p + 3] = (byte)(t.Y & 0xFF);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(p + 4, 4), (uint)t.Jpeg.Length);
+            p += FramePacket.TileEntrySize;
+        }
+
+        // 分块表写完必须正好落在数据区起点（这里曾经漏加表项长度，导致后面的拷贝越界）
+        if (p != FramePacket.HeaderSize + tileHeader) return null;
+
+        foreach (var t in delta.Tiles)
+        {
+            Buffer.BlockCopy(t.Jpeg, 0, packet, p, t.Jpeg.Length);
+            p += t.Jpeg.Length;
+        }
+
+        return packet;
     }
 
     // ---------------- 接收 ----------------
@@ -354,7 +464,7 @@ public sealed class ClientConnection : IDisposable
                     MaxWidth = _maxWidth,
                     RemoteControl = _host.RemoteControlEnabled,
                     MachineName = Environment.MachineName,
-                    Version = "1.0.0"
+                    Version = "1.0.3"
                 });
                 _host.OnClientSettingsChanged(this);
                 break;
@@ -368,12 +478,14 @@ public sealed class ClientConnection : IDisposable
                 if (msg.Fps.HasValue) _fps = Math.Clamp(msg.Fps.Value, 1, 60);
                 if (msg.MaxWidth.HasValue) _maxWidth = Math.Clamp(msg.MaxWidth.Value, 200, 7680);
                 AttachStream();
+                Volatile.Read(ref _streamRef)?.Engine.RequestKeyFrame();
                 _host.OnClientSettingsChanged(this);
                 break;
 
             case "crop":
                 _crop = (msg.X0 == null && msg.X1 == null) ? Rectangle.Empty : NormalizeCrop(msg);
                 AttachStream();
+                Volatile.Read(ref _streamRef)?.Engine.RequestKeyFrame();
                 QueueText(new ServerMessage { Type = "crop", Cropped = !_crop.IsEmpty });
                 _host.OnClientSettingsChanged(this);
                 break;

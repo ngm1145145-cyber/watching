@@ -28,6 +28,18 @@ public sealed class ScreenEncoder : IDisposable
 
     public ScreenEncoder(int quality) => SetQuality(quality);
 
+    /// <summary>最近一次编码所用的 JPEG 编码器（增量编码复用）。</summary>
+    public ImageCodecInfo JpegCodec => _jpegCodec;
+
+    /// <summary>最近一次编码所用的编码参数（增量编码复用）。</summary>
+    public EncoderParameters JpegParams => _encoderParams;
+
+    /// <summary>
+    /// 最近一次 Capture 之后、目标分辨率下的整帧位图。
+    /// 调用方只能在下次 Capture 之前读取（内部会复用这块缓冲）。
+    /// </summary>
+    public Bitmap LastFrameBitmap { get; private set; }
+
     public static ImageCodecInfo FindJpegCodec()
     {
         try
@@ -105,6 +117,7 @@ public sealed class ScreenEncoder : IDisposable
             // 输出缓冲就是全屏缓冲
             outW = _outW;
             outH = _outH;
+            LastFrameBitmap = _fullBmp;
             return Encode(_fullBmp, crop.Width, crop.Height);
         }
 
@@ -125,6 +138,7 @@ public sealed class ScreenEncoder : IDisposable
 
         outW = targetW;
         outH = targetH;
+        LastFrameBitmap = _outBmp;
         return Encode(_outBmp, targetW, targetH);
     }
 

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0-android</TargetFramework>
@@ -10,7 +10,7 @@
     <AssemblyName>WatchingMobile</AssemblyName>
     <ApplicationId>com.watching.mobile</ApplicationId>
     <ApplicationVersion>1</ApplicationVersion>
-    <ApplicationDisplayVersion>1.0.2</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>1.0.3</ApplicationDisplayVersion>
 
     <!-- 直接产出可安装的 APK -->
     <AndroidPackageFormat>apk</AndroidPackageFormat>

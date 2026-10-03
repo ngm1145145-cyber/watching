@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using ImageSource = System.Windows.Media.ImageSource;
 using System.Windows.Threading;
 using Watching.Common;
 using UserControl = System.Windows.Controls.UserControl;
@@ -26,7 +27,7 @@ namespace Watching.Desktop;
 public partial class ScreenView : UserControl
 {
     private FrameClient _client;
-    private BitmapImage _image;
+    private System.Windows.Media.Imaging.BitmapSource _image;
     private DispatcherTimer _hudTimer;
     private DispatcherTimer _statTimer;
     private Point _dragStart;
@@ -63,7 +64,7 @@ public partial class ScreenView : UserControl
 
     public bool ShowHudWhenFullscreen { get; set; } = true;
 
-    public BitmapImage CurrentImage => _image;
+    public System.Windows.Media.Imaging.BitmapSource CurrentImage => _image;
 
     public void Attach(FrameClient client)
     {
@@ -81,7 +82,6 @@ public partial class ScreenView : UserControl
         ScreenImage.Source = _image;
         UpdateLayoutMode();
     }
-
     private void OnStats(object sender, ClientStats stats)
     {
         _lastStats = stats;
@@ -112,7 +112,8 @@ public partial class ScreenView : UserControl
         }
         string res = s.Width > 0 ? $" · {s.Width}×{s.Height}" : "";
         string tip = FitToggle.IsChecked == true ? "适应窗口" : $"{(int)(ZoomSlider.Value * 100)}%";
-        StatusPill.Text = $"{s.Fps:F0} fps · {s.Kbps:F0} KB/s{res} · {tip}";
+        string delta = s.DeltaRatio > 0.01 ? $" · 增量 {s.DeltaRatio:P0}" : "";
+        StatusPill.Text = $"{s.Fps:F0} fps · {s.Kbps:F0} KB/s{res}{delta} · {tip}";
         StatusPill.Visibility = Visibility.Visible;
 
         if (IsFullscreenHosted)

@@ -15,7 +15,17 @@ public static class FramePacket
     public const int MetaSize = 256;
     public const int HeaderSize = 4 + 8 + MetaSize; // magic + seq + meta
 
-    private static readonly JsonSerializerOptions Opts = new() { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
+    /// <summary>增量包的分块表魔数。</summary>
+    public const string TileMagic = "DT01";
+    /// <summary>分块表表头长度：4 字节魔数 + 4 字节分块数。</summary>
+    public const int TileTableHeader = 8;
+    /// <summary>每个分块表项长度：x(2) + y(2) + 长度(4)。</summary>
+    public const int TileEntrySize = 8;
+
+    public static readonly JsonSerializerOptions Opts = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
 
     public sealed class Meta
     {
@@ -29,6 +39,100 @@ public static class FramePacket
         public string mode { get; set; }
         public double capMs { get; set; }
         public double encMs { get; set; }
+        /// <summary>分块边长（mode=delta 时客户端用它定位每块）。</summary>
+        public int tile { get; set; }
+        /// <summary>横向分块数。</summary>
+        public int tx { get; set; }
+        /// <summary>纵向分块数。</summary>
+        public int ty { get; set; }
+
+        /// <summary>是否是增量帧。</summary>
+        public bool IsDelta => string.Equals(mode, "delta", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>一个变化分块。</summary>
+    public sealed class Tile
+    {
+        public int X { get; init; }
+        public int Y { get; init; }
+        public int Length { get; init; }
+        public int JpegOffset { get; init; }
+    }
+
+    /// <summary>解析结果（两种帧统一表示）。</summary>
+    public sealed class Parsed
+    {
+        public long Sequence { get; init; }
+        public Meta Meta { get; init; }
+
+        /// <summary>原始整包数据（分块 JPEG 是包内切片，解码要用）。</summary>
+        public byte[] PacketData { get; init; }
+
+        /// <summary>整帧 JPEG 的偏移；0 表示这是增量帧。</summary>
+        public int FullJpegOffset { get; init; }
+        public int FullJpegLength { get; init; }
+
+        /// <summary>变化分块表。</summary>
+        public List<Tile> Tiles { get; init; } = new();
+
+        public bool IsDelta => FullJpegOffset == 0;
+    }
+
+    /// <summary>解析一个二进制帧（整帧或增量都支持）。</summary>
+    public static bool TryParsePacket(byte[] data, out Parsed parsed)
+    {
+        parsed = null;
+        if (!TryUnpack(data, out long seq, out Meta meta, out int bodyOffset)) return false;
+        if (meta == null) return false;
+
+        var result = new Parsed { Sequence = seq, Meta = meta, PacketData = data };
+
+        if (!meta.IsDelta)
+        {
+            // 整帧：body 就是 JPEG
+            parsed = new Parsed
+            {
+                Sequence = seq,
+                Meta = meta,
+                PacketData = data,
+                FullJpegOffset = bodyOffset,
+                FullJpegLength = data.Length - bodyOffset
+            };
+            return true;
+        }
+
+        // 增量：body = "DT01" + count + 表项 + 各分块 JPEG
+        if (data.Length < bodyOffset + TileTableHeader) return false;
+        if (data[bodyOffset] != 'D' || data[bodyOffset + 1] != 'T' ||
+            data[bodyOffset + 2] != '0' || data[bodyOffset + 3] != '1') return false;
+
+        int count = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(bodyOffset + 4, 4));
+        if (count < 0 || count > 4096) return false;
+
+        int p = bodyOffset + TileTableHeader;
+        if (data.Length < p + count * TileEntrySize) return false;
+
+        var tiles = new List<Tile>(count);
+        for (int i = 0; i < count; i++)
+        {
+            int x = (data[p] << 8) | data[p + 1];
+            int y = (data[p + 2] << 8) | data[p + 3];
+            int len = (int)BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(p + 4, 4));
+            p += TileEntrySize;
+            tiles.Add(new Tile { X = x, Y = y, Length = len, JpegOffset = 0 });
+        }
+
+        int dataOffset = p;
+        var final = new List<Tile>(count);
+        foreach (var t in tiles)
+        {
+            if (dataOffset + t.Length > data.Length) return false;
+            final.Add(new Tile { X = t.X, Y = t.Y, Length = t.Length, JpegOffset = dataOffset });
+            dataOffset += t.Length;
+        }
+
+        parsed = new Parsed { Sequence = seq, Meta = meta, PacketData = data, Tiles = final };
+        return true;
     }
 
     /// <summary>打包一帧：4 字节魔数 + 8 字节序号 + 256 字节 JSON 元数据 + JPEG。</summary>

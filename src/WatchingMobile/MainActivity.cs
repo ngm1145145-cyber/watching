@@ -59,6 +59,11 @@ public class MainActivity : Activity
     private volatile bool _decoding;
     private bool _searching;
 
+    // 分块增量合成用的基准位图（整帧替换，增量帧往上面贴变化块）
+    private Bitmap _composite;
+    private double _lastDeltaRatio;
+    private string _detailBase;
+
     // 断线重连用（回到前台时恢复）
     private string _lastHost;
     private int _lastPort;
@@ -476,9 +481,12 @@ public class MainActivity : Activity
             _wasWatching = false;
             _viewerPanel.Visibility = ViewStates.Gone;
             _loginPanel.Visibility = ViewStates.Visible;
-            var old = _image.Drawable;
+
             _image.SetImageDrawable(null);
-            (old as BitmapDrawable)?.Bitmap?.Recycle();
+            try { _composite?.Recycle(); } catch { }
+            _composite = null;
+            _lastDeltaRatio = 0;
+            _detailBase = null;
         }
     }
 
@@ -520,8 +528,9 @@ public class MainActivity : Activity
             if (msg.Type == "welcome")
             {
                 var who = string.IsNullOrEmpty(msg.MachineName) ? _client?.Host : msg.MachineName;
-                _detailText.Text = $"服务端 {who} · 屏幕 {msg.ScreenWidth}×{msg.ScreenHeight}" +
-                                   (msg.RemoteControl ? " · 允许远程控制" : "");
+                _detailBase = $"服务端 {who} · 屏幕 {msg.ScreenWidth}×{msg.ScreenHeight}" +
+                              (msg.RemoteControl ? " · 允许远程控制" : "");
+                UpdateDetailWithDelta();
             }
             else if (msg.Type == "error" && !string.IsNullOrEmpty(msg.Message))
             {
@@ -553,15 +562,64 @@ public class MainActivity : Activity
 
         try
         {
-            var bitmap = BitmapFactory.DecodeByteArray(e.Jpeg, 0, e.Jpeg.Length);
-            if (bitmap == null) return;
+            var parsed = e.Frame;
+            if (parsed == null) return;
+
+            if (!parsed.IsDelta)
+            {
+                // 整帧：作为新的合成基准
+                var bmp = BitmapFactory.DecodeByteArray(parsed.FullJpeg, 0, parsed.FullJpeg.Length);
+                if (bmp == null) return;
+
+                var mutable = bmp.GetConfig() == Bitmap.Config.Argb8888 && bmp.IsMutable
+                    ? bmp
+                    : bmp.Copy(Bitmap.Config.Argb8888, true);
+                if (!ReferenceEquals(mutable, bmp)) bmp.Recycle();
+
+                RunOnUiThread(() =>
+                {
+                    _composite = mutable;
+                    _image.SetSourceSize(mutable.Width, mutable.Height);
+                    _image.SetImageBitmap(mutable);
+                    UpdateDetailWithDelta();
+                });
+                return;
+            }
+
+            // 增量帧：把变化的分块画到基准上
+            var baseBmp = _composite;
+            if (baseBmp == null) return;   // 还没有基准，等关键帧
+
+            var decoded = new System.Collections.Generic.List<(int x, int y, Bitmap bmp)>();
+            foreach (var tile in parsed.Tiles)
+            {
+                var tb = BitmapFactory.DecodeByteArray(tile.Jpeg, 0, tile.Jpeg.Length);
+                if (tb != null) decoded.Add((tile.X, tile.Y, tb));
+            }
+            if (decoded.Count == 0) return;
+
+            long totalFrames = e.DeltaFrames + e.FullFrames;
+            _lastDeltaRatio = totalFrames > 0 ? e.DeltaFrames / (double)totalFrames : 0;
 
             RunOnUiThread(() =>
             {
-                var old = _image.Drawable;
-                _image.SetSourceSize(bitmap.Width, bitmap.Height);
-                _image.SetImageBitmap(bitmap);
-                (old as BitmapDrawable)?.Bitmap?.Recycle();
+                try
+                {
+                    using var canvas = new Canvas(baseBmp);
+                    using var paint = new Paint { FilterBitmap = false };
+                    foreach (var (x, y, bmp) in decoded)
+                    {
+                        canvas.DrawBitmap(bmp, x, y, paint);
+                        bmp.Recycle();
+                    }
+                    // 复用同一个 Bitmap 时需要通知控件重绘
+                    _image.Invalidate();
+                    UpdateDetailWithDelta();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn(Tag, "分块合成失败: " + ex.Message);
+                }
             });
         }
         catch (Exception ex)
@@ -572,6 +630,15 @@ public class MainActivity : Activity
         {
             _decoding = false;
         }
+    }
+
+    private void UpdateDetailWithDelta()
+    {
+        string baseText = _detailBase;
+        if (string.IsNullOrEmpty(baseText) && _client != null && !string.IsNullOrEmpty(_client.ServerName))
+            baseText = $"服务端 {_client.ServerName} · 屏幕 {_client.ScreenWidth}×{_client.ScreenHeight}";
+
+        _detailText.Text = (baseText ?? "") + (_lastDeltaRatio > 0.01 ? $" · 增量 {_lastDeltaRatio:P0}" : "");
     }
 
     // ---------------- 画质 / 全屏 ----------------

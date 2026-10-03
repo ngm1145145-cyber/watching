@@ -1,4 +1,4 @@
-# Build the WatchingMobile APK (ASCII-only: Windows PowerShell 5.1 mis-parses UTF-8 without BOM).
+﻿# Build the WatchingMobile APK (ASCII-only: Windows PowerShell 5.1 mis-parses UTF-8 without BOM).
 # Usage: powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 [-SdkDir <Android SDK path>] [-JdkDir <JDK 17 path>]
 param(
     [string]$SdkDir = "H:\ds-harness\android-sdk",
@@ -48,7 +48,7 @@ $built = Join-Path $apkDir "com.watching.mobile-Signed.apk"
 if (-not (Test-Path $built)) { throw "APK not found: $built" }
 
 New-Item -ItemType Directory -Force $dist | Out-Null
-$target = Join-Path $dist "WatchingMobile-1.0.2.apk"
+$target = Join-Path $dist "WatchingMobile-1.0.3.apk"
 Copy-Item $built $target -Force
 
 $mb = [Math]::Round((Get-Item $target).Length / 1MB, 2)

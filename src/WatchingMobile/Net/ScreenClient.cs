@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -11,9 +11,14 @@ public enum ScreenClientState { Idle, Connecting, Connected, Reconnecting, AuthF
 
 public sealed class FrameEventArgs : EventArgs
 {
-    public byte[] Jpeg { get; init; }
-    public FramePacket.Meta Meta { get; init; }
+    /// <summary>解析后的帧：整帧（FullJpeg）或增量（Tiles）。</summary>
+    public FramePacket.Parsed Frame { get; init; }
     public long Sequence { get; init; }
+    public int ByteLength { get; init; }
+    public bool IsDelta { get; init; }
+    /// <summary>累计收到的增量帧 / 整帧数量（界面上显示省流量效果用）。</summary>
+    public long DeltaFrames { get; init; }
+    public long FullFrames { get; init; }
 }
 
 public sealed class StatsEventArgs : EventArgs
@@ -38,6 +43,8 @@ public sealed class ScreenClient : IDisposable
     private long _frames;
     private long _dropped;
     private long _lastSeq = -1;
+    private long _deltaFrames;
+    private long _fullFrames;
     private int _bytesWindow;
     private long _framesWindow;
     private long _statTick;
@@ -118,7 +125,7 @@ public sealed class ScreenClient : IDisposable
                     Type = "hello",
                     Kind = "mobile",
                     Name = ClientName,
-                    Version = "1.0.2"
+                    Version = "1.0.3"
                 }.ToJson(), ct).ConfigureAwait(false);
 
                 _statTick = Environment.TickCount64;
@@ -230,12 +237,11 @@ public sealed class ScreenClient : IDisposable
 
         try
         {
-            if (!FramePacket.TryParse(data, out long seq, out var meta, out int jpegOffset)) return;
-            if (seq == _lastSeq) return;
-            _lastSeq = seq;
+            if (!FramePacket.TryParse(data, out var parsed)) return;
+            if (parsed.Sequence == _lastSeq) return;
+            _lastSeq = parsed.Sequence;
 
-            var jpeg = new byte[data.Length - jpegOffset];
-            Buffer.BlockCopy(data, jpegOffset, jpeg, 0, jpeg.Length);
+            if (parsed.IsDelta) _deltaFrames++; else _fullFrames++;
 
             _frames++;
             _framesWindow++;
@@ -249,8 +255,8 @@ public sealed class ScreenClient : IDisposable
                 {
                     Fps = _framesWindow / seconds,
                     Kbps = _bytesWindow / 1024.0 / seconds,
-                    Width = meta?.w ?? 0,
-                    Height = meta?.h ?? 0,
+                    Width = parsed.Meta?.w ?? 0,
+                    Height = parsed.Meta?.h ?? 0,
                     Frames = _frames,
                     Dropped = _dropped
                 };
@@ -260,7 +266,18 @@ public sealed class ScreenClient : IDisposable
                 try { StatsUpdated?.Invoke(this, stats); } catch { }
             }
 
-            try { FrameReceived?.Invoke(this, new FrameEventArgs { Jpeg = jpeg, Meta = meta, Sequence = seq }); }
+            try
+            {
+                FrameReceived?.Invoke(this, new FrameEventArgs
+                {
+                    Frame = parsed,
+                    Sequence = parsed.Sequence,
+                    ByteLength = data.Length,
+                    IsDelta = parsed.IsDelta,
+                    DeltaFrames = _deltaFrames,
+                    FullFrames = _fullFrames
+                });
+            }
             catch { }
         }
         catch

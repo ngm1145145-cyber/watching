@@ -17,10 +17,12 @@ public enum ClientState { Idle, Connecting, Connected, Closed, Failed }
 
 public sealed class FrameEventArgs : EventArgs
 {
-    public BitmapImage Image { get; init; }
+    public System.Windows.Media.Imaging.BitmapSource Image { get; init; }
     public FramePacket.Meta Meta { get; init; }
     public long Sequence { get; init; }
     public int ByteLength { get; init; }
+    /// <summary>本帧是否是增量帧（只含变化分块）。</summary>
+    public bool IsDelta { get; init; }
 }
 
 public sealed class ClientStats
@@ -38,6 +40,8 @@ public sealed class ClientStats
     public int ScreenHeight { get; set; }
     /// <summary>单帧解码+渲染消耗（毫秒），用于判断是网络还是本机解码跟不上。</summary>
     public double SendMs { get; set; }
+    /// <summary>增量帧占比（0~1），越高说明省流量效果越好。</summary>
+    public double DeltaRatio { get; set; }
 }
 
 /// <summary>WebSocket 画面接收端（自动重连、自动丢帧、可发送远程输入）。</summary>
@@ -54,6 +58,8 @@ public sealed class FrameClient : IDisposable
     private double _sendMsTotal;
     private int _sendMsCount;
     private long _dropped;
+    private long _deltaFrames;
+    private long _fullFrames;
     private long _frames;
     private int _pendingFrames;
     private long _lastSeq = -1;
@@ -257,23 +263,16 @@ public sealed class FrameClient : IDisposable
 
         try
         {
-            if (!FramePacket.TryUnpack(data, out long seq, out var meta, out int jpegOffset)) return;
+            if (!FramePacket.TryParsePacket(data, out var parsed)) return;
 
-            var image = Decode(data, jpegOffset, data.Length - jpegOffset);
-            if (image == null) return;
+            long seq = parsed.Sequence;
+            var meta = parsed.Meta;
 
             _frames++;
             _framesWindow++;
             _bytesWindow += data.Length;
             _lastSeq = seq;
-
-            var args = new FrameEventArgs
-            {
-                Image = image,
-                Meta = meta,
-                Sequence = seq,
-                ByteLength = data.Length
-            };
+            if (parsed.IsDelta) _deltaFrames++; else _fullFrames++;
 
             long now = Environment.TickCount64;
             if (now - _lastStatTick >= 1000)
@@ -285,8 +284,8 @@ public sealed class FrameClient : IDisposable
                 Stats.Height = meta.h;
                 Stats.Frames = _frames;
                 Stats.Dropped = _dropped;
-                Stats.Remote = Stats.Remote;
                 Stats.SendMs = _sendMsCount > 0 ? Math.Round(_sendMsTotal / _sendMsCount, 1) : 0;
+                Stats.DeltaRatio = _frames > 0 ? _deltaFrames / (double)_frames : 0;
 
                 _framesWindow = 0;
                 _bytesWindow = 0;
@@ -307,12 +306,14 @@ public sealed class FrameClient : IDisposable
                     ServerName = Stats.ServerName,
                     ScreenWidth = Stats.ScreenWidth,
                     ScreenHeight = Stats.ScreenHeight,
-                    SendMs = Stats.SendMs
+                    SendMs = Stats.SendMs,
+                    DeltaRatio = Stats.DeltaRatio
                 };
                 _dispatcher.BeginInvoke(new Action(() => StatsUpdated?.Invoke(this, snapshot)));
             }
 
-            _dispatcher.BeginInvoke(new Action(() => FrameReceived?.Invoke(this, args)),
+            // 合成（WriteableBitmap 写入）必须在 UI 线程做
+            _dispatcher.BeginInvoke(new Action(() => ApplyAndRaise(parsed)),
                 DispatcherPriority.Render);
         }
         catch
@@ -323,6 +324,88 @@ public sealed class FrameClient : IDisposable
         {
             Interlocked.Decrement(ref _pendingFrames);
         }
+    }
+
+    /// <summary>在 UI 线程上把分块合成为完整画面并抛给界面。</summary>
+    private void ApplyAndRaise(FramePacket.Parsed parsed)
+    {
+        try
+        {
+            var image = Apply(parsed);
+            if (image == null) return;
+
+            var args = new FrameEventArgs
+            {
+                Image = image,
+                Meta = parsed.Meta,
+                Sequence = parsed.Sequence,
+                ByteLength = _lastPacketLength,
+                IsDelta = parsed.IsDelta
+            };
+
+            FrameReceived?.Invoke(this, args);
+        }
+        catch
+        {
+            // 忽略合成失败（下一帧是整帧时会自动恢复）
+        }
+    }
+
+    private System.Windows.Media.Imaging.WriteableBitmap _composite;
+    private byte[] _lastPacketData;
+    private int _lastPacketLength;
+
+    /// <summary>
+    /// 把收到的内容合成成完整画面：
+    /// 整帧 → 直接作为新基准；增量帧 → 把变化分块贴到基准对应位置。
+    /// </summary>
+    private System.Windows.Media.Imaging.BitmapSource Apply(FramePacket.Parsed parsed)
+    {
+        // 把整包数据留着给解码用（分块 JPEG 是包内的切片）
+        _lastPacketData = parsed.PacketData;
+        _lastPacketLength = parsed.PacketData?.Length ?? 0;
+
+        if (!parsed.IsDelta)
+        {
+            var bmp = DecodeClip(parsed.FullJpegOffset, parsed.FullJpegLength);
+            if (bmp == null) return null;
+
+            var wb = new WriteableBitmap(bmp);
+            wb.Freeze();
+            _composite = wb;
+            return wb;
+        }
+
+        var baseBmp = _composite;
+        if (baseBmp == null) return null;   // 还没有基准，等关键帧
+
+        foreach (var tile in parsed.Tiles)
+        {
+            var bmp = DecodeClip(tile.JpegOffset, tile.Length);
+            if (bmp == null) continue;
+
+            try
+            {
+                int w = bmp.PixelWidth, h = bmp.PixelHeight;
+                int stride = w * 4;
+                var pixels = new byte[stride * h];
+                bmp.CopyPixels(pixels, stride, 0);
+                baseBmp.WritePixels(new System.Windows.Int32Rect(tile.X, tile.Y, w, h), pixels, stride, 0);
+            }
+            catch
+            {
+                // 单块失败不影响其它块
+            }
+        }
+
+        return baseBmp;
+    }
+
+    private BitmapSource DecodeClip(int offset, int length)
+    {
+        var data = _lastPacketData;
+        if (data == null || length <= 0 || offset + length > data.Length) return null;
+        return Decode(data, offset, length);
     }
 
     private static BitmapImage Decode(byte[] buffer, int offset, int count)
