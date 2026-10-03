@@ -38,6 +38,12 @@ public sealed class ServerHost : IDisposable
 
     public int ClientCount => _clients.Count;
 
+    private DiscoveryService _discovery;
+
+    /// <summary>局域网自动发现服务（UDP），可能为空（端口被占等情况）。</summary>
+    public DiscoveryService Discovery => _discovery;
+    public bool DiscoveryRunning => _discovery?.IsRunning == true;
+
     public ServerHost(AppConfig config)
     {
         _config = config;
@@ -53,6 +59,49 @@ public sealed class ServerHost : IDisposable
         _net.Start();
         IsRunning = true;
         Log.Write($"监听 0.0.0.0:{_config.Port}");
+
+        if (_config.DiscoveryEnabled)
+        {
+            _discovery = new DiscoveryService(
+                _config,
+                () => ClientCount,
+                () => Environment.MachineName,
+                () => _config.AccessControlActive);
+            _discovery.Start();
+        }
+
+        // 启动时顺手体检一次：防火墙没放行是「手机连不上」的头号原因
+        var diag = NetworkDiagnostics.Run();
+        Log.Write("网络自检：" + diag.Summary());
+    }
+
+    /// <summary>重新体检网络（用户点「刷新」或改完防火墙后调用）。</summary>
+    public NetworkDiagnostics RefreshDiagnostics() => NetworkDiagnostics.Run();
+
+    /// <summary>尝试添加防火墙放行规则（会弹一次 UAC）。</summary>
+    public bool FixFirewall(out string message)
+    {
+        bool ok = FirewallHelper.AddRulesWithElevation(_config.Port, out message);
+
+        // 规则变化后重启发现服务，让 UDP 监听也吃到新规则
+        try
+        {
+            _discovery?.Dispose();
+            _discovery = null;
+            if (_config.DiscoveryEnabled && ok)
+            {
+                _discovery = new DiscoveryService(_config, () => ClientCount,
+                    () => Environment.MachineName, () => _config.AccessControlActive);
+                _discovery.Start();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("重启发现服务失败", ex);
+        }
+
+        Changed?.Invoke();
+        return ok;
     }
 
     internal void RegisterClient(ClientConnection client)
@@ -158,6 +207,8 @@ public sealed class ServerHost : IDisposable
 
     public void Dispose()
     {
+        try { _discovery?.Dispose(); } catch { }
+        _discovery = null;
         foreach (var c in Clients) c.Close();
         _clients.Clear();
         _net.Dispose();

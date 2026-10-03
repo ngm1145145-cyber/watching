@@ -124,6 +124,32 @@
                     </StackPanel>
                 </Border>
 
+                <!-- 网络与发现 -->
+                <Border Background="{StaticResource Panel}" CornerRadius="8" Padding="16" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="网络与自动发现" FontSize="15" FontWeight="SemiBold" />
+
+                        <TextBlock x:Name="NetworkStatusText" Margin="0,12,0,0" TextWrapping="Wrap"
+                                   Foreground="{StaticResource Fg}" />
+
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <Button Content="重新体检" Style="{StaticResource FlatButton}" Click="NetCheck_Click" />
+                            <Button x:Name="FixFirewallButton" Content="一键放行防火墙"
+                                    Style="{StaticResource AccentButton}" Margin="8,0,0,0" Click="FixFirewall_Click" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="NetworkDetailText" Margin="0,12,0,0" TextWrapping="Wrap"
+                                   Foreground="{StaticResource FgDim}" FontFamily="Consolas" FontSize="12" />
+
+                        <CheckBox x:Name="DiscoveryCheck" Margin="0,14,0,0"
+                                  Content="启用局域网自动发现（UDP 广播，客户端不用手填 IP）" />
+                        <CheckBox x:Name="SkipUnchangedCheck" Margin="0,8,0,0"
+                                  Content="静止画面跳过重复帧（省流量）" />
+                        <CheckBox x:Name="AdaptiveCheck" Margin="0,8,0,0"
+                                  Content="网络拥塞时自动降低画质（保证不卡）" />
+                    </StackPanel>
+                </Border>
+
                 <!-- 客户端 -->
                 <Border Background="{StaticResource Panel}" CornerRadius="8" Padding="16">
                     <StackPanel>

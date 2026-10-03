@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
 | `Watching-win-x64-framework.zip` | 0.16 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
-| `WatchingMobile-1.0.1.apk` | 39.4 MB | 安卓手机 |
+| `WatchingMobile-1.0.2.apk` | 39.4 MB | 安卓手机 |
 
 > 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
 > `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
@@ -132,11 +132,16 @@ Watching.exe --server
 
 启动后 A 上**看不到任何窗口**，只有右下角托盘多出一个蓝色眼睛图标。
 
-> **首次运行如果 Windows 弹出防火墙提示**，勾选「专用网络」并允许。
-> 如果没弹或者手机连不上，右键托盘图标看地址，或管理员运行 `shortcuts\4-添加防火墙规则.bat`。
+> **⚠ 首次使用请先放行防火墙**：Windows 默认阻止入站连接，不放行的话手机 / 别的电脑永远连不上。
+> 最简单的方式：**托盘图标右键 →「⚠ 一键放行防火墙」**（弹一次 UAC 确认即可，会自动加 TCP + UDP 两条规则）。
+> 也可以在托盘右键 →「网络自检」里看结论，或管理员运行 `shortcuts\4-添加防火墙规则.bat`。
 
-**怎么知道 A 的 IP？** 托盘图标右键，菜单里会直接列出手机可访问的地址，例如
-`手机访问：http://192.168.1.8:8899/`；也可以运行 `shortcuts\3-查看手机访问地址.bat`。
+**怎么知道 A 的 IP？** 有三种办法：
+
+1. **客户端自动搜索**（推荐）：电脑客户端点「搜索服务端」，手机 App 点「搜索局域网服务端」，
+   通过 UDP 广播自动找到并填好 IP。
+2. 托盘图标右键，菜单里直接列出手机可访问的地址，例如 `手机访问：http://192.168.1.8:8899/`。
+3. 运行 `shortcuts\3-查看手机访问地址.bat`。
 
 ### 2️⃣ 在 B（电脑）上看
 
@@ -164,8 +169,8 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 
 ### 3️⃣ 在 B（手机）上看
 
-**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.1.apk` 传到手机安装
-（或数据线连上后 `adb install -r WatchingMobile-1.0.1.apk`）。
+**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.2.apk` 传到手机安装
+（或数据线连上后 `adb install -r WatchingMobile-1.0.2.apk`）。
 打开 App → 填 `192.168.1.8` 和端口 `8899` → 「开始观看」。
 
 **方式二：用浏览器** —— 手机浏览器打开 `http://192.168.1.8:8899/` → 「开始观看」，免安装。
@@ -311,12 +316,12 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 `
     -SdkDir "D:\android-sdk" -JdkDir "C:\Program Files\Eclipse Adoptium\jdk-17"
 ```
 
-产物：`dist\apk\WatchingMobile-1.0.1.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
+产物：`dist\apk\WatchingMobile-1.0.2.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
 
 安装：
 
 ```bash
-adb install -r dist/apk/WatchingMobile-1.0.1.apk
+adb install -r dist/apk/WatchingMobile-1.0.2.apk
 ```
 
 > 首次编译安卓端需要 `.NET android` 工作负载：`dotnet workload install android`。
@@ -409,9 +414,12 @@ watching/
 │   │   │   ├─ CaptureHub.cs        按需创建与回收抓屏流
 │   │   │   ├─ CaptureEngine.cs     抓屏循环（无人观看时完全不动）
 │   │   │   ├─ ScreenEncoder.cs     GDI 抓屏 + JPEG 编码（复用位图）
-│   │   │   ├─ ClientConnection.cs  单个客户端的收发 / 画质 / 裁剪 / 丢帧
-│   │   │   ├─ NetServer.cs         内置 HTTP + WebSocket 服务器
-│   │   │   ├─ WebSocketProtocol.cs RFC6455 服务端实现 + 帧封装
+│   │   │   ├─ ClientConnection.cs  单个客户端的收发 / 画质 / 裁剪 / 丢帧 / 静态跳帧 / 自适应码率
+│   │   │   ├─ NetServer.cs         内置 HTTP + WebSocket 服务器（含 socket 调优）
+│   │   │   ├─ WebSocketProtocol.cs RFC6455 服务端实现 + 帧封装（零拷贝直写）
+│   │   │   ├─ FirewallHelper.cs    Windows 防火墙查询与一键放行（netsh + UAC）
+│   │   │   ├─ NetworkDiagnostics.cs 网络自检：网卡枚举 / 可用性判断 / 结论
+│   │   │   ├─ DiscoveryService.cs  UDP 自动发现（应答探测 + 定时广播）
 │   │   │   ├─ InputInjector.cs     远程鼠标键盘注入（SendInput）
 │   │   │   ├─ TrayIcon.cs          托盘图标与菜单
 │   │   │   ├─ SettingsWindow.xaml  设置界面
@@ -420,6 +428,7 @@ watching/
 │   │   │   └─ AutoStartHelper.cs   开机自启
 │   │   ├─ Desktop/             电脑客户端
 │   │   │   ├─ FrameClient.cs       WebSocket 客户端（重连 / 丢帧 / 统计）
+│   │   │   ├─ DiscoveryClient.cs   UDP 搜索服务端（客户端侧）
 │   │   │   ├─ MainWindow.xaml      连接栏 + 画面 + 状态栏
 │   │   │   ├─ ScreenView.xaml      画面控件（缩放 / 全屏 / 输入 / 截图）
 │   │   │   └─ FullscreenWindow.xaml 无边框全屏
@@ -435,6 +444,7 @@ watching/
 │       └─ Net/
 │           ├─ WsSession.cs     自己实现的 RFC6455 WebSocket 客户端
 │           ├─ Protocol.cs      "WF01" 帧解析 + 控制消息
+│           ├─ UdpDiscovery.cs  UDP 搜索服务端（含安卓 MulticastLock）
 │           └─ ScreenClient.cs  连接 / 重连 / 丢帧 / 密码错误识别 / 统计
 ├─ tools/                       联调与验证工具
 │   ├─ test-client.mjs          Node 收帧 + 校验协议 + 存图
@@ -444,7 +454,7 @@ watching/
 │   ├─ serve-static.mjs         本地预览 docs/ 落地页的极简静态服务器
 │   └─ ProtocolCheck/           复用安卓 App 的网络源码，在 Windows 上验证协议
 └─ dist/                        构建产物（未提交到仓库，见 .gitignore）
-    ├─ apk/WatchingMobile-1.0.1.apk
+    ├─ apk/WatchingMobile-1.0.2.apk
     ├─ Watching-win-x64-selfcontained/
     └─ Watching-win-x64-framework/
 ```
@@ -507,14 +517,6 @@ IP 形如 `192.168.x.x` 或 `10.x.x.x`，注意不要用 `127.0.0.1`（那是本
 <summary><b>客户端提示「服务端未开启远程控制」？</b></summary>
 
 这是**正常状态**：默认只能看不能操作。需要时在服务端托盘右键 → 设置 → 打开「允许客户端远程控制」，要先设置密码并验证。
-</details>
-
-<details>
-<summary><b>画面卡顿 / 流量太大？</b></summary>
-
-- 客户端点「画质」切到 **流畅**（1080 宽 / q45 / 12fps）。
-- 服务端设置里把「发送宽度」降到 1280 或 960。
-- 服务端设置里确认帧率没有开得太高（15–20 帧对看屏足够）。
 </details>
 
 <details>

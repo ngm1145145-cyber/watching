@@ -32,6 +32,10 @@ public partial class SettingsWindow : Window
         _accessBackup = config.AccessPassword;
         AutoStartCheck.IsChecked = AutoStartHelper.IsEnabled();
 
+        DiscoveryCheck.IsChecked = config.DiscoveryEnabled;
+        SkipUnchangedCheck.IsChecked = config.SkipUnchangedFrames;
+        AdaptiveCheck.IsChecked = config.AdaptiveQuality;
+
         UpdatePasswordState();
         UpdateSubtitle();
 
@@ -39,6 +43,7 @@ public partial class SettingsWindow : Window
         UpdateLabels();
 
         ListenText.Text = "局域网访问地址：" + string.Join("    ", host.LocalUrls());
+        RefreshNetworkStatus();
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => RefreshClients();
@@ -70,6 +75,63 @@ public partial class SettingsWindow : Window
             ClientsText.Text = _host.DescribeClients();
         }
         catch { }
+    }
+
+    /// <summary>刷新网络体检结果（防火墙是否放行、有哪些可用网卡）。</summary>
+    private void RefreshNetworkStatus()
+    {
+        try
+        {
+            var diag = _host.RefreshDiagnostics();
+
+            NetworkStatusText.Text = diag.Summary();
+            NetworkStatusText.Foreground = diag.NeedsFix
+                ? (System.Windows.Media.Brush)FindResource("Danger")
+                : (System.Windows.Media.Brush)FindResource("Ok");
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"防火墙：TCP {(diag.TcpRuleExists ? "已放行" : "未放行")} / UDP {(diag.UdpRuleExists ? "已放行" : "未放行")}" +
+                          $"    自动发现：{(_host.DiscoveryRunning ? "开启" : "关闭")}");
+            foreach (var a in diag.Adapters)
+                sb.AppendLine($"{a.Ip,-16} {(a.LooksUsable ? "可用" : a.LooksVirtual ? "虚拟机网卡" : "不推荐")}");
+
+            NetworkDetailText.Text = sb.ToString();
+            FixFirewallButton.IsEnabled = diag.NeedsFix;
+            FixFirewallButton.Content = diag.NeedsFix ? "一键放行防火墙" : "防火墙已放行";
+        }
+        catch (Exception ex)
+        {
+            Common.Log.Error("刷新网络状态失败", ex);
+        }
+    }
+
+    private void NetCheck_Click(object sender, RoutedEventArgs e) => RefreshNetworkStatus();
+
+    private void FixFirewall_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            FixFirewallButton.IsEnabled = false;
+            FixFirewallButton.Content = "正在提权…";
+
+            bool ok = _host.FixFirewall(out string message);
+            RefreshNetworkStatus();
+            ListenText.Text = "局域网访问地址：" + string.Join("    ", _host.LocalUrls());
+
+            MessageBox.Show(this,
+                (ok ? "✅ 已放行，手机/其它电脑现在可以连了。\n\n" : "⚠ 没能完成放行\n\n") + message,
+                "Watching 防火墙", MessageBoxButton.OK,
+                ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "操作失败：" + ex.Message, "Watching",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            RefreshNetworkStatus();
+        }
     }
 
     private void UpdateLabels()
@@ -194,6 +256,11 @@ public partial class SettingsWindow : Window
         _config.MaxWidth = (int)WidthSlider.Value;
         _config.AutoStart = AutoStartCheck.IsChecked == true;
 
+        bool discoveryWas = _config.DiscoveryEnabled;
+        _config.DiscoveryEnabled = DiscoveryCheck.IsChecked == true;
+        _config.SkipUnchangedFrames = SkipUnchangedCheck.IsChecked == true;
+        _config.AdaptiveQuality = AdaptiveCheck.IsChecked == true;
+
         if (AutoStartCheck.IsChecked == true)
         {
             if (!AutoStartHelper.Apply(true))
@@ -215,7 +282,17 @@ public partial class SettingsWindow : Window
         _config.Save();
 
         Log.Write($"设置已保存：远程控制={_config.RemoteControlEnabled}，访问密码={_config.AccessControlActive}，" +
-                  $"帧率={_config.Fps}，画质={_config.Quality}，宽度={_config.MaxWidth}");
+                  $"帧率={_config.Fps}，画质={_config.Quality}，宽度={_config.MaxWidth}，" +
+                  $"自动发现={_config.DiscoveryEnabled}，跳重复帧={_config.SkipUnchangedFrames}，自适应={_config.AdaptiveQuality}");
+
+        if (discoveryWas != _config.DiscoveryEnabled)
+        {
+            MessageBox.Show(this,
+                _config.DiscoveryEnabled
+                    ? "自动发现设置已保存，重启服务端后生效。"
+                    : "已关闭自动发现，重启服务端后生效（客户端需要手动输入 IP）。",
+                "Watching", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
 
         Close();
     }

@@ -10,7 +10,7 @@
     <AssemblyName>WatchingMobile</AssemblyName>
     <ApplicationId>com.watching.mobile</ApplicationId>
     <ApplicationVersion>1</ApplicationVersion>
-    <ApplicationDisplayVersion>1.0.1</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>1.0.2</ApplicationDisplayVersion>
 
     <!-- 直接产出可安装的 APK -->
     <AndroidPackageFormat>apk</AndroidPackageFormat>

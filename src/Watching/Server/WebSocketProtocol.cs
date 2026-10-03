@@ -46,6 +46,25 @@ public static class FramePacket
         return buf;
     }
 
+    /// <summary>
+    /// 组装 268 字节的帧头（4 字节魔数 + 8 字节序号 + 256 字节 JSON），写到调用方给的缓冲里。
+    /// 复用同一个 byte[] 就不需要每帧分配。
+    /// </summary>
+    public static bool WriteMetaHeader(byte[] buffer, long seq, Meta meta)
+    {
+        if (buffer == null || buffer.Length < HeaderSize) return false;
+
+        var json = JsonSerializer.SerializeToUtf8Bytes(meta, Opts);
+        if (json.Length > MetaSize) return false;
+
+        buffer[0] = (byte)'W'; buffer[1] = (byte)'F';
+        buffer[2] = (byte)'0'; buffer[3] = (byte)'1';
+        BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(4, 8), seq);
+        Array.Clear(buffer, 12, MetaSize);
+        Array.Copy(json, 0, buffer, 12, json.Length);
+        return true;
+    }
+
     public static bool TryUnpack(byte[] data, out long seq, out Meta meta, out int jpegOffset)
     {
         seq = 0; meta = null; jpegOffset = 0;
@@ -114,6 +133,39 @@ public static class WebSocketProtocol
     public static System.Threading.Tasks.Task WriteTextAsync(NetworkStream stream, string text,
         System.Threading.CancellationToken ct = default)
         => WriteFrameAsync(stream, Utf8.GetBytes(text ?? ""), OpText, ct);
+
+    /// <summary>
+    /// 直接把「268 字节帧头 + JPEG」写出去，不做中间拼接拷贝。
+    /// 注意：WebSocket 帧长必须是 <b>头 + JPEG 的总长</b>（这里曾经漏算头导致客户端解析错位）。
+    /// </summary>
+    public static async System.Threading.Tasks.Task WritePacketAsync(NetworkStream stream, byte[] jpeg,
+        byte[] header268, System.Threading.CancellationToken ct = default)
+    {
+        int payloadLen = header268.Length + jpeg.Length;
+
+        int headerLen = 2 + (payloadLen < 126 ? 0 : (payloadLen <= ushort.MaxValue ? 2 : 8));
+        var wsHeader = new byte[headerLen];
+
+        wsHeader[0] = (byte)(0x80 | OpBinary);
+        if (payloadLen < 126)
+        {
+            wsHeader[1] = (byte)payloadLen;
+        }
+        else if (payloadLen <= ushort.MaxValue)
+        {
+            wsHeader[1] = 126;
+            BinaryPrimitives.WriteUInt16BigEndian(wsHeader.AsSpan(2, 2), (ushort)payloadLen);
+        }
+        else
+        {
+            wsHeader[1] = 127;
+            BinaryPrimitives.WriteUInt64BigEndian(wsHeader.AsSpan(2, 8), (ulong)payloadLen);
+        }
+
+        await stream.WriteAsync(wsHeader, ct).ConfigureAwait(false);
+        await stream.WriteAsync(header268, ct).ConfigureAwait(false);
+        await stream.WriteAsync(jpeg, ct).ConfigureAwait(false);
+    }
 
     public static async System.Threading.Tasks.Task<(int opCode, byte[] payload)> ReadFrameAsync(
         NetworkStream stream, System.Threading.CancellationToken ct = default)

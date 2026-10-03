@@ -113,9 +113,19 @@ public sealed class ClientConnection : IDisposable
         }
     }
 
+    /// <summary>
+    /// 发送循环。做了几处传输层优化：
+    ///   1. 复用同一个 268 字节头缓冲 + 直接把 JPEG 写给 socket，不再每帧拼接一个大数组
+    ///   2. 完全没变化的画面跳过不发（静止桌面几乎不占带宽）
+    ///   3. 统计单帧发送耗时，超过预算就自适应降画质/降帧，避免越堆越卡
+    /// </summary>
     private async Task SendLoopAsync()
     {
         var pingClock = Stopwatch.StartNew();
+        var header = new byte[FramePacket.HeaderSize];
+        bool adaptive = _config.AdaptiveQuality;
+        int effectiveQuality = _quality;
+        int effectiveFps = _fps;
 
         try
         {
@@ -167,6 +177,25 @@ public sealed class ClientConnection : IDisposable
 
                 if (seq == _lastSentSeq) continue;
                 if (_lastSentSeq >= 0 && seq - _lastSentSeq > Math.Max(3, _fps)) _framesDropped++;
+
+                // 5) 静止画面跳过：和上一帧字节完全一致就不发（省流量）
+                if (_config.SkipUnchangedFrames && jpeg.Length == _lastFrameLength && jpeg.Length > 0)
+                {
+                    ulong hash = Hash64(jpeg);
+                    if (hash == _lastFrameHash)
+                    {
+                        _framesSkipped++;
+                        _lastSentSeq = seq;
+                        continue;
+                    }
+                    _lastFrameHash = hash;
+                }
+                else
+                {
+                    _lastFrameLength = jpeg.Length;
+                    if (_config.SkipUnchangedFrames) _lastFrameHash = Hash64(jpeg);
+                }
+
                 _lastSentSeq = seq;
 
                 var meta = new FramePacket.Meta
@@ -175,27 +204,64 @@ public sealed class ClientConnection : IDisposable
                     h = h,
                     sw = stream.Engine.ScreenWidth,
                     sh = stream.Engine.ScreenHeight,
-                    q = _quality,
+                    q = effectiveQuality,
                     crop = cropped,
                     ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     mode = "gdi",
                     capMs = Math.Round(stream.Engine.LastCaptureMs, 1)
                 };
 
-                var packet = FramePacket.Pack(seq, meta, jpeg);
-                await WebSocketProtocol.WriteFrameAsync(_stream, packet, WebSocketProtocol.OpBinary, _cts.Token)
-                    .ConfigureAwait(false);
+                if (!FramePacket.WriteMetaHeader(header, seq, meta))
+                {
+                    await Task.Delay(20, _cts.Token).ConfigureAwait(false);
+                    continue;
+                }
+
+                var sendWatch = Stopwatch.StartNew();
+                await WebSocketProtocol.WritePacketAsync(_stream, jpeg, header, _cts.Token).ConfigureAwait(false);
+                sendWatch.Stop();
 
                 _framesSent++;
-                _bytesInWindow += packet.Length;
+                _bytesInWindow += jpeg.Length + header.Length;
 
                 long now = Environment.TickCount64;
                 if (_statTick == 0) _statTick = now;
-                if (now - _statTick >= 1000)
+                long window = now - _statTick;
+                if (window >= 1000)
                 {
-                    _kbps = _bytesInWindow / 1024.0 * 1000.0 / Math.Max(1, now - _statTick);
+                    _kbps = _bytesInWindow / 1024.0 * 1000.0 / Math.Max(1, window);
                     _bytesInWindow = 0;
                     _statTick = now;
+
+                    // 每 30 秒记一条传输统计，方便确认优化是否生效
+                    long watch = now - _lastLogTick;
+                    if (watch >= 30000)
+                    {
+                        _lastLogTick = now;
+                        Log.Write($"[传输] {Id} 已发 {_framesSent} 帧 / 跳过 {_framesSkipped} 帧" +
+                                  $"（静止画面省流量）· 丢帧 {_framesDropped} · 当前 {_kbps:F0} KB/s" +
+                                  $" · 单帧发送 {_sendMs:F0}ms · 画质 {effectiveQuality}");
+                    }
+                }
+
+                // 6) 自适应：发送明显变慢说明链路拥塞，降低画质与帧率，慢慢再恢复
+                _sendMs = _sendMs <= 0 ? sendWatch.Elapsed.TotalMilliseconds
+                                       : _sendMs * 0.7 + sendWatch.Elapsed.TotalMilliseconds * 0.3;
+
+                if (adaptive && stream.Engine is CaptureEngine engine && _framesSent % 8 == 0)
+                {
+                    int targetFrameMs = (int)(1000.0 / Math.Max(1, _fps));
+                    if (_sendMs > targetFrameMs * 0.8 && effectiveQuality > 40)
+                    {
+                        effectiveQuality = Math.Max(40, effectiveQuality - 8);
+                        engine.SetQuality(effectiveQuality);
+                        Log.Write($"链路拥塞（发送 {_sendMs:F0}ms）→ 自动降画质到 {effectiveQuality}");
+                    }
+                    else if (_sendMs < targetFrameMs * 0.35 && effectiveQuality < _quality)
+                    {
+                        effectiveQuality = Math.Min(_quality, effectiveQuality + 4);
+                        engine.SetQuality(effectiveQuality);
+                    }
                 }
             }
         }
@@ -207,6 +273,24 @@ public sealed class ClientConnection : IDisposable
         {
             Close();
         }
+    }
+
+    private long _lastFrameLength = -1;
+    private ulong _lastFrameHash;
+    private long _framesSkipped;
+    private double _sendMs;
+    private long _lastLogTick = Environment.TickCount64;
+
+    /// <summary>FNV-1a：比 SHA256 快得多，用来判断两帧 JPEG 是否完全相同足够。</summary>
+    private static ulong Hash64(byte[] data)
+    {
+        ulong h = 14695981039346656037UL;
+        for (int i = 0; i < data.Length; i++)
+        {
+            h ^= data[i];
+            h *= 1099511628211UL;
+        }
+        return h;
     }
 
     // ---------------- 接收 ----------------

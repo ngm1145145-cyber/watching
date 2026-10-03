@@ -58,10 +58,23 @@ public sealed class ScreenEncoder : IDisposable
             Math.Max(1, User32.GetSystemMetrics(User32.SM_CYVIRTUALSCREEN)));
     }
 
-    /// <summary>抓取一帧并编码成 JPEG。</summary>
+    /// <summary>
+    /// 抓取一帧并编码成 JPEG。
+    /// 注意：多个抓屏流共享位图缓冲，必须串行调用（内部有锁）。
+    /// </summary>
     /// <param name="crop">屏幕绝对坐标下的裁剪区域；Empty 表示整个虚拟桌面。</param>
     /// <param name="maxWidth">发送宽度上限，0 表示原始大小。</param>
     public byte[] Capture(Rectangle crop, int maxWidth, out int outW, out int outH)
+    {
+        lock (_captureGate)
+        {
+            return CaptureLocked(crop, maxWidth, out outW, out outH);
+        }
+    }
+
+    private readonly object _captureGate = new();
+
+    private byte[] CaptureLocked(Rectangle crop, int maxWidth, out int outW, out int outH)
     {
         var vs = VirtualScreenBounds();
         if (crop.IsEmpty || crop.Width <= 0 || crop.Height <= 0)

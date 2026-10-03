@@ -60,7 +60,7 @@ public sealed class NetServer : IDisposable
             try
             {
                 var tcp = _listener.AcceptTcpClient();
-                tcp.NoDelay = true;
+                TuneSocket(tcp);
                 var t = new Thread(() => HandleTcp(tcp)) { IsBackground = true };
                 t.Start();
             }
@@ -69,6 +69,28 @@ public sealed class NetServer : IDisposable
                 if (_running) Log.Error("接受连接失败", ex);
                 Thread.Sleep(200);
             }
+        }
+    }
+
+    /// <summary>
+    /// 针对「连续推画面」这种场景调 socket：
+    ///   NoDelay      —— 关掉 Nagle，单帧立刻发出去，少几十毫秒延迟
+    ///   发送缓冲区   —— 调到 256KB，避免突发大帧时阻塞发送线程
+    ///   接收缓冲区   —— 64KB 足够（客户端只发小的控制消息）
+    ///   KeepAlive    —— 客户端异常掉线（比如手机断 WiFi）能被及时发现
+    /// </summary>
+    private static void TuneSocket(TcpClient tcp)
+    {
+        try
+        {
+            tcp.NoDelay = true;
+            tcp.SendBufferSize = 256 * 1024;
+            tcp.ReceiveBufferSize = 64 * 1024;
+            tcp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("调整 socket 参数失败（不影响功能）：" + ex.Message);
         }
     }
 

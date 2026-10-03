@@ -32,6 +32,15 @@ public sealed class AppConfig
     /// <summary>是否开机自动启动服务端。</summary>
     public bool AutoStart { get; set; }
 
+    /// <summary>是否启用局域网自动发现（UDP 广播，客户端不用手填 IP）。</summary>
+    public bool DiscoveryEnabled { get; set; } = true;
+
+    /// <summary>是否对完全没变化的画面跳过重复帧（省流量）。</summary>
+    public bool SkipUnchangedFrames { get; set; } = true;
+
+    /// <summary>网络拥塞时是否自动降画质/帧率（保证流畅不卡）。</summary>
+    public bool AdaptiveQuality { get; set; } = true;
+
     /// <summary>客户端上次连接的地址（方便下次直接连）。</summary>
     public string LastHost { get; set; }
 

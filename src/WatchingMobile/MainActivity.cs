@@ -40,6 +40,7 @@ public class MainActivity : Activity
     private EditText _hostBox, _portBox, _pwdBox;
     private CheckBox _rememberBox;
     private TextView _loginStatus;
+    private Button _searchButton;
 
     // 观看界面
     private FrameLayout _viewerPanel;
@@ -56,6 +57,7 @@ public class MainActivity : Activity
     private double _lastFps, _lastKbps;
     private int _frameWidth, _frameHeight;
     private volatile bool _decoding;
+    private bool _searching;
 
     // 断线重连用（回到前台时恢复）
     private string _lastHost;
@@ -214,7 +216,22 @@ public class MainActivity : Activity
         connect.SetBackgroundColor(Color.ParseColor("#3B82F6"));
         connect.SetAllCaps(false);
         connect.Click += (_, _) => Connect();
-        card.AddView(connect, Lp(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent, 0, 8));
+
+        // 「搜索服务端」：UDP 广播自动找，不用手抄 IP
+        _searchButton = new Button(this) { Text = "搜索局域网服务端" };
+        _searchButton.SetTextColor(Color.ParseColor("#E6EAF2"));
+        _searchButton.SetTextSize(Android.Util.ComplexUnitType.Sp, 14f);
+        _searchButton.SetBackgroundColor(Color.ParseColor("#232A36"));
+        _searchButton.SetAllCaps(false);
+        _searchButton.Click += async (_, _) => await SearchServersAsync();
+
+        var buttonRow = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        var connectLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent) { Weight = 1f };
+        buttonRow.AddView(connect, connectLp);
+        var searchLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent) { Weight = 1f };
+        searchLp.LeftMargin = Dp(8);
+        buttonRow.AddView(_searchButton, searchLp);
+        card.AddView(buttonRow, Lp(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent, 0, 8));
 
         _loginStatus = new TextView(this) { Text = "" };
         _loginStatus.SetTextSize(Android.Util.ComplexUnitType.Sp, 13f);
@@ -223,7 +240,8 @@ public class MainActivity : Activity
 
         var hint = new TextView(this)
         {
-            Text = "提示：手机和电脑要在同一个 WiFi 下。地址也可以直接写 192.168.1.8:8899。"
+            Text = "提示：手机和电脑要在同一个 WiFi 下。不知道 IP 就点「搜索局域网服务端」；\n" +
+                   "地址也可以直接写 192.168.1.8:8899。连不上时请检查服务端是否已放行防火墙。"
         };
         hint.SetTextSize(Android.Util.ComplexUnitType.Sp, 12f);
         hint.SetTextColor(Color.ParseColor("#5B6675"));
@@ -328,6 +346,74 @@ public class MainActivity : Activity
             editor.PutBoolean("remember", false);
         }
         editor.Apply();
+    }
+
+    /// <summary>
+    /// 搜索局域网里的服务端（UDP 广播）。只找到一个就直接填上，多个则弹列表让用户选。
+    /// </summary>
+    private async Task SearchServersAsync()
+    {
+        if (_searching) return;
+        _searching = true;
+
+        try
+        {
+            _searchButton.Enabled = false;
+            _searchButton.Text = "搜索中…";
+            _loginStatus.SetTextColor(Color.ParseColor("#98A2B3"));
+            _loginStatus.Text = "正在局域网内搜索服务端…";
+
+            int port = int.TryParse((_portBox.Text ?? "8899").Trim(), out var p) && p > 0 ? p : 8899;
+            var servers = await UdpDiscovery.SearchAsync(this, port, 3500);
+
+            if (servers.Count == 0)
+            {
+                _loginStatus.SetTextColor(Color.ParseColor("#FCA5A5"));
+                _loginStatus.Text = "没搜到服务端。请确认：①服务端已启动 ②同一个 WiFi " +
+                                    "③服务端已放行防火墙（托盘右键 → 网络自检 → 一键放行）";
+                return;
+            }
+
+            if (servers.Count == 1)
+            {
+                var s = servers[0];
+                _hostBox.Text = s.Host;
+                _portBox.Text = s.Port.ToString();
+                _loginStatus.SetTextColor(Color.ParseColor("#86EFAC"));
+                _loginStatus.Text = $"找到 {s.MachineName}（{s.Host}:{s.Port}），正在连接…";
+                Connect();
+                return;
+            }
+
+            _loginStatus.SetTextColor(Color.ParseColor("#86EFAC"));
+            _loginStatus.Text = $"找到 {servers.Count} 个服务端，请选择：";
+
+            var labels = servers.Select(s => s.Describe()).ToArray();
+            new AlertDialog.Builder(this)
+                .SetTitle("选择要连接的服务端")
+                .SetItems(labels, (_, args) =>
+                {
+                    var s = servers[args.Which];
+                    _hostBox.Text = s.Host;
+                    _portBox.Text = s.Port.ToString();
+                    _loginStatus.Text = $"已选择 {s.Host}:{s.Port}";
+                    Connect();
+                })
+                .SetNegativeButton("取消", (_, _) => { })
+                .Show();
+        }
+        catch (Exception ex)
+        {
+            _loginStatus.SetTextColor(Color.ParseColor("#FCA5A5"));
+            _loginStatus.Text = "搜索失败：" + ex.Message;
+            Log.Warn(Tag, "搜索失败: " + ex);
+        }
+        finally
+        {
+            _searching = false;
+            _searchButton.Enabled = true;
+            _searchButton.Text = "搜索局域网服务端";
+        }
     }
 
     private void Connect()

@@ -78,6 +78,28 @@ public sealed class TrayIcon : IDisposable
 
         menu.Items.Add(new WinForms.ToolStripSeparator());
 
+        // 网络自检：防火墙没放行是「手机连不上」的头号原因，直接放在菜单第一行
+        var diag = _host.RefreshDiagnostics();
+        var netItem = new WinForms.ToolStripMenuItem("网络自检：" + Shorten(diag.Summary(), 42));
+        netItem.Click += (_, _) => ShowNetworkCheck();
+        menu.Items.Add(netItem);
+
+        if (diag.NeedsFix)
+        {
+            var allow = new WinForms.ToolStripMenuItem("⚠ 一键放行防火墙（需要管理员）");
+            allow.Font = new Font(WinForms.Control.DefaultFont, System.Drawing.FontStyle.Bold);
+            allow.Click += (_, _) => RunFirewallFix();
+            menu.Items.Add(allow);
+        }
+
+        if (_host.DiscoveryRunning)
+        {
+            menu.Items.Add(new WinForms.ToolStripMenuItem(
+                $"自动发现已开启（已应答 {_host.Discovery?.ProbesAnswered ?? 0} 次搜索）") { Enabled = false });
+        }
+
+        menu.Items.Add(new WinForms.ToolStripSeparator());
+
         var settings = new WinForms.ToolStripMenuItem("设置…（需要密码）");
         settings.Click += (_, _) => ShowSettings();
         menu.Items.Add(settings);
@@ -135,6 +157,79 @@ public sealed class TrayIcon : IDisposable
     {
         var dlg = new PasswordDialog(PasswordDialogMode.Verify, "请输入设置密码");
         return dlg.ShowDialog() == true ? dlg.Password : null;
+    }
+
+    private static string Shorten(string text, int max)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        return text.Length <= max ? text : text.Substring(0, max - 1) + "…";
+    }
+
+    /// <summary>弹出一个自检报告窗口，并可以直接一键放行防火墙。</summary>
+    public void ShowNetworkCheck()
+    {
+        try
+        {
+            var diag = _host.RefreshDiagnostics();
+            var sb = new System.Text.StringBuilder();
+
+            sb.AppendLine("结论：" + diag.Summary());
+            sb.AppendLine();
+            sb.AppendLine($"防火墙规则：TCP {(diag.TcpRuleExists ? "已放行 ✅" : "未放行 ❌")}    " +
+                          $"UDP {(diag.UdpRuleExists ? "已放行 ✅" : "未放行 ❌")}");
+            sb.AppendLine($"自动发现：{(_host.DiscoveryRunning ? "已开启" : "未开启")}" +
+                          $"    监听端口：{_host.Port}");
+            sb.AppendLine();
+            sb.AppendLine("本机可用地址：");
+            foreach (var url in _host.LocalUrls()) sb.AppendLine("    " + url);
+            sb.AppendLine();
+            sb.AppendLine("网卡明细：");
+            foreach (var a in diag.Adapters)
+            {
+                sb.AppendLine($"    {a.Ip,-16} {(a.LooksUsable ? "可用" : a.LooksVirtual ? "虚拟机网卡（客户端一般连不上）" : "不推荐")}    {a.Name}");
+            }
+
+            if (diag.NeedsFix)
+            {
+                sb.AppendLine();
+                sb.AppendLine("⚠ 防火墙没有放行 Watching 的端口，手机和别的电脑都连不上。");
+                sb.AppendLine("   点「否」只关闭本窗口；点「是」会弹出 UAC 提权对话框自动放行。");
+            }
+
+            var result = WinForms.MessageBox.Show(sb.ToString(), "Watching 网络自检",
+                diag.NeedsFix ? WinForms.MessageBoxButtons.YesNo : WinForms.MessageBoxButtons.OK,
+                diag.NeedsFix ? WinForms.MessageBoxIcon.Warning : WinForms.MessageBoxIcon.Information);
+
+            if (diag.NeedsFix && result == WinForms.DialogResult.Yes) RunFirewallFix();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("网络自检失败", ex);
+        }
+    }
+
+    /// <summary>一键放行（会弹 UAC）。</summary>
+    public void RunFirewallFix()
+    {
+        try
+        {
+            bool ok = _host.FixFirewall(out string message);
+            var after = _host.RefreshDiagnostics();
+
+            WinForms.MessageBox.Show(
+                (ok ? "✅ 已放行\n\n" : "⚠ 没能完成\n\n") + message + "\n\n" + after.Summary(),
+                "Watching 防火墙",
+                WinForms.MessageBoxButtons.OK,
+                ok ? WinForms.MessageBoxIcon.Information : WinForms.MessageBoxIcon.Warning);
+
+            UpdateTooltip();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("放行防火墙失败", ex);
+            WinForms.MessageBox.Show("操作失败：" + ex.Message, "Watching",
+                WinForms.MessageBoxButtons.OK, WinForms.MessageBoxIcon.Error);
+        }
     }
 
     public void ShowSettings()

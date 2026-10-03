@@ -62,6 +62,105 @@ public partial class MainWindow : Window
         PortBox.Text = App.Config.Port.ToString();
     }
 
+    /// <summary>局域网自动搜索服务端（UDP 广播），用户不用再手抄 IP。</summary>
+    private async void Search_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SearchButton.IsEnabled = false;
+            SearchButton.Content = "搜索中…";
+            StateText.Text = "正在局域网内搜索服务端…";
+
+            int port = int.TryParse(PortBox.Text, out var p) && p > 0 ? p : 8899;
+            var servers = await DiscoveryClient.SearchAsync(port, 3000);
+
+            if (servers.Count == 0)
+            {
+                StateText.Text = "没搜到服务端";
+                MessageBox.Show(this,
+                    "局域网里没有搜到 Watching 服务端。\n\n" +
+                    "请确认：\n" +
+                    "  1. 服务端那台电脑已经启动 Watching 服务端\n" +
+                    "  2. 两台机器在同一个 WiFi / 局域网\n" +
+                    "  3. 服务端已放行防火墙（服务端托盘右键 → 网络自检 → 一键放行）\n\n" +
+                    "也可以直接手动输入 IP 后点「连接」。",
+                    "Watching", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (servers.Count > 1)
+            {
+                var lines = servers.Select((s, i) => $"{i + 1}. {s.Describe()}").ToArray();
+                int pick = PromptPick(lines);
+                if (pick < 0) { StateText.Text = "已取消"; return; }
+                HostBox.Text = servers[pick].Host;
+                PortBox.Text = servers[pick].Port.ToString();
+            }
+            else
+            {
+                HostBox.Text = servers[0].Host;
+                PortBox.Text = servers[0].Port.ToString();
+            }
+
+            StateText.Text = $"找到 {servers.Count} 个服务端，正在连接 {HostBox.Text}:{PortBox.Text}";
+            Connect();
+        }
+        catch (Exception ex)
+        {
+            Common.Log.Error("搜索服务端失败", ex);
+            StateText.Text = "搜索失败：" + ex.Message;
+        }
+        finally
+        {
+            SearchButton.IsEnabled = true;
+            SearchButton.Content = "搜索服务端";
+        }
+    }
+
+    /// <summary>搜到多个服务端时让用户挑一个（返回索引，-1 表示取消）。</summary>
+    private int PromptPick(string[] lines)
+    {
+        var win = new Window
+        {
+            Title = "选择要连接的服务端",
+            Width = 460,
+            Height = 320,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = this,
+            Background = (System.Windows.Media.Brush)FindResource("Bg")
+        };
+
+        var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(16) };
+        panel.Children.Add(new System.Windows.Controls.TextBlock
+        {
+            Text = "局域网里找到多个服务端，选一个：",
+            Margin = new Thickness(0, 0, 0, 10)
+        });
+
+        var list = new System.Windows.Controls.ListBox { Height = 170 };
+        foreach (var l in lines) list.Items.Add(l);
+        list.SelectedIndex = 0;
+        panel.Children.Add(list);
+
+        int result = -1;
+        var ok = new System.Windows.Controls.Button
+        {
+            Content = "连接",
+            Margin = new Thickness(0, 12, 0, 0),
+            Padding = new Thickness(14, 7, 14, 7)
+        };
+        ok.Click += (_, _) =>
+        {
+            result = list.SelectedIndex;
+            win.Close();
+        };
+        panel.Children.Add(ok);
+
+        win.Content = panel;
+        win.ShowDialog();
+        return result;
+    }
+
     private void Connect()
     {
         string host = (HostBox.Text ?? "").Trim();

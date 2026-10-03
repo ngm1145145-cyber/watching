@@ -36,6 +36,8 @@ public sealed class ClientStats
     public string ServerName { get; set; }
     public int ScreenWidth { get; set; }
     public int ScreenHeight { get; set; }
+    /// <summary>单帧解码+渲染消耗（毫秒），用于判断是网络还是本机解码跟不上。</summary>
+    public double SendMs { get; set; }
 }
 
 /// <summary>WebSocket 画面接收端（自动重连、自动丢帧、可发送远程输入）。</summary>
@@ -49,6 +51,8 @@ public sealed class FrameClient : IDisposable
     private int _bytesWindow;
     private long _framesWindow;
     private long _lastStatTick;
+    private double _sendMsTotal;
+    private int _sendMsCount;
     private long _dropped;
     private long _frames;
     private int _pendingFrames;
@@ -210,7 +214,12 @@ public sealed class FrameClient : IDisposable
             }
             else if (result.MessageType == WebSocketMessageType.Binary)
             {
+                // 顺带统计本机处理一帧的耗时，方便区分「网络慢」还是「解码慢」
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 HandleFrame(data);
+                sw.Stop();
+                _sendMsTotal += sw.Elapsed.TotalMilliseconds;
+                _sendMsCount++;
             }
         }
     }
@@ -277,9 +286,12 @@ public sealed class FrameClient : IDisposable
                 Stats.Frames = _frames;
                 Stats.Dropped = _dropped;
                 Stats.Remote = Stats.Remote;
+                Stats.SendMs = _sendMsCount > 0 ? Math.Round(_sendMsTotal / _sendMsCount, 1) : 0;
 
                 _framesWindow = 0;
                 _bytesWindow = 0;
+                _sendMsTotal = 0;
+                _sendMsCount = 0;
                 _lastStatTick = now;
 
                 var snapshot = new ClientStats
@@ -294,7 +306,8 @@ public sealed class FrameClient : IDisposable
                     Remote = Stats.Remote,
                     ServerName = Stats.ServerName,
                     ScreenWidth = Stats.ScreenWidth,
-                    ScreenHeight = Stats.ScreenHeight
+                    ScreenHeight = Stats.ScreenHeight,
+                    SendMs = Stats.SendMs
                 };
                 _dispatcher.BeginInvoke(new Action(() => StatsUpdated?.Invoke(this, snapshot)));
             }
