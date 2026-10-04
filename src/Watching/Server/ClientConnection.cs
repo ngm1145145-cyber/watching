@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -465,7 +465,7 @@ public sealed class ClientConnection : IDisposable
                     MaxWidth = _maxWidth,
                     RemoteControl = _host.RemoteControlEnabled,
                     MachineName = Environment.MachineName,
-                    Version = "1.0.6"
+                    Version = "1.0.7"
                 });
                 _host.OnClientSettingsChanged(this);
                 break;

@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
 | `Watching-win-x64-framework.zip` | 0.16 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
-| `WatchingMobile-1.0.6.apk` | 39.4 MB | 安卓手机 |
+| `WatchingMobile-1.0.7.apk` | 39.4 MB | 安卓手机 |
 
 > 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
 > `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
@@ -169,8 +169,8 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 
 ### 3️⃣ 在 B（手机）上看
 
-**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.6.apk` 传到手机安装
-（或数据线连上后 `adb install -r WatchingMobile-1.0.6.apk`）。
+**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.7.apk` 传到手机安装
+（或数据线连上后 `adb install -r WatchingMobile-1.0.7.apk`）。
 打开 App → 填 `192.168.1.8` 和端口 `8899` → 「开始观看」。
 
 **方式二：用浏览器** —— 手机浏览器打开 `http://192.168.1.8:8899/` → 「开始观看」，免安装。
@@ -247,9 +247,20 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 | 客户端 | 怎么开启 | 能做什么 |
 | --- | --- | --- |
 | **电脑客户端**（WPF） | 连接栏的「允许远程控制」勾上（服务端允许时自动勾选） | 移动鼠标即移动对方光标、左/右键点击、滚轮、键盘输入（含 Ctrl/Alt/Shift/Win 组合键） |
-| **安卓 App** | 顶部点 **「控制:关」** 切成「控制:开」 | 单指点按 = 单击、按住拖动 = 按住左键拖动；点 **「键盘」** 调出输入法打字；双指缩放不受影响 |
+| **安卓 App** | 顶部点 **「控制:关」** 切成「控制:开」 | 点按 = 左键单击、拖动 = 按住左键拖动、**长按 = 右键单击**、**双指上下滑 = 滚轮**、双指捏合 = 缩放；点 **「键盘」** 调出输入法打字 |
 | **电脑网页客户端** | 顶栏点 **「控制:关」** 切成「控制:开」 | 点击/拖动、滚轮、键盘（F11 仍是网页全屏） |
-| **手机网页客户端** | 顶部点 **「控制:关」** 切成「控制:开」 | 同安卓 App（点按/拖动 + 「键盘」按钮） |
+| **手机网页客户端** | 顶部点 **「控制:关」** 切成「控制:开」 | 同安卓 App（点按/拖动/长按右键/双指滑动滚动 + 「键盘」按钮） |
+
+**触摸手势一览（安卓 App 与手机网页完全一致）：**
+
+| 手势 | 效果 | 说明 |
+| --- | --- | --- |
+| 单指点按 | 左键单击 | 手指落在哪，对方光标就跳到哪（绝对定位） |
+| 单指按住拖动 | 按住左键拖动 | 位移超过 8px 才升级为按住，避免"想点一下却变成拖" |
+| **单指长按 480ms** | **右键单击** | 松手前不动才会触发；触发后手机轻微振动一下，状态条显示「已发送右键单击」 |
+| **双指上下滑** | **滚轮上下滚** | 手指上滑 = 内容跟着往上走（等同滚轮向下），每 60px 算一格 |
+| 双指捏合/张开 | 缩放画面 | 两指距离变化超过 ±15% 就判定为缩放，不会误发滚轮 |
+| 「键盘」按钮 | 键盘输入 | 中文/表情走 Unicode 注入 |
 
 **安卓 App 具体操作步骤：**
 
@@ -257,10 +268,17 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 2. 点它变成 **「控制:开」**（会自动切到「适应屏幕」，让手指位置和真实坐标一一对应）：
    - **单指点按** → 对方电脑上一次左键单击
    - **按住并拖动** → 按住左键拖动（拖窗口、划选文字）
+   - **长按约半秒** → 对方电脑上一次右键单击（弹出右键菜单）
+   - **双指上下滑** → 滚轮滚动（看网页、滚动列表）
    - **双指捏合** → 仍然是缩放查看，不会误操作对方
 3. 打字：点 **「键盘」** → 弹出输入法 → 输入内容发到对方电脑（支持退格、回车、
    中文/表情走 Unicode 注入）。
 4. 再点一次「控制:开」回到只读模式。
+
+> **为什么长按是 480ms？** 安卓系统默认的长按阈值约 500ms 且不可调，而系统默认的
+> 「长按」在旧版本里会和双击（切换全屏）冲突。控制模式下我们**不再把触摸交给系统手势识别器**，
+> 而是自己计时：480ms 内松手 = 单击，超时未动 = 右键，中途移动超过 8px = 取消长按改为拖动。
+> 所以控制模式下**双击不再切换全屏**，请用顶部的全屏按钮。
 
 > 开启控制后画面会出现**蓝色描边**作为提示，避免误操作。
 > 服务端没开远程控制时，按钮显示 **「控制:不可用」**，点它会提示去服务端哪里打开。
@@ -345,12 +363,12 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 `
     -SdkDir "D:\android-sdk" -JdkDir "C:\Program Files\Eclipse Adoptium\jdk-17"
 ```
 
-产物：`dist\apk\WatchingMobile-1.0.6.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
+产物：`dist\apk\WatchingMobile-1.0.7.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
 
 安装：
 
 ```bash
-adb install -r dist/apk/WatchingMobile-1.0.6.apk
+adb install -r dist/apk/WatchingMobile-1.0.7.apk
 ```
 
 > 首次编译安卓端需要 `.NET android` 工作负载：`dotnet workload install android`。
@@ -516,9 +534,9 @@ watching/
 │   └─ WatchingMobile/          安卓原生 App（C#）
 │       ├─ WatchingMobile.csproj
 │       ├─ Properties/AndroidManifest.xml
-│       ├─ MainActivity.cs      全部界面（纯 C# 构建）+ 沉浸式全屏 + 手势
-│       ├─ ScreenImageView.cs   画面控件：等比缩放 / 捏合 / 拖动 / 双击
-│       ├─ Resources/           矢量图标、颜色、主题
+│       ├─ MainActivity.cs      全部界面（纯 C# 构建）+ 沉浸式全屏 + 触摸手势（点按/拖动/长按右键/双指滚动）
+│       ├─ ScreenImageView.cs   画面控件：等比缩放 / 捏合 / 拖动 / 双击 / 控制模式下接管单指与双指手势
+│       ├─ Resources/           图标 PNG（5 种密度，API 24 上矢量图标会闪退）、颜色、主题
 │       └─ Net/
 │           ├─ WsSession.cs     自己实现的 RFC6455 WebSocket 客户端
 │           ├─ Protocol.cs      "WF01" 帧解析 + 控制消息
@@ -529,10 +547,12 @@ watching/
 │   ├─ test-auth.mjs            验证访问密码是否真的生效
 │   ├─ test-input.mjs           验证远程鼠标注入
 │   ├─ browser-verify.mjs       用 Chrome DevTools 协议验证网页客户端/落地页
+│   ├─ gesture-verify.mjs       ⚠会动鼠标：验证触摸手势 → 控制消息（7 项）
+│   ├─ inject-verify.mjs        ⚠会动鼠标：验证控制消息 → 真实程序（右键/滚轮 3 项）
 │   ├─ serve-static.mjs         本地预览 docs/ 落地页的极简静态服务器
 │   └─ ProtocolCheck/           复用安卓 App 的网络源码，在 Windows 上验证协议
 └─ dist/                        构建产物（未提交到仓库，见 .gitignore）
-    ├─ apk/WatchingMobile-1.0.6.apk
+    ├─ apk/WatchingMobile-1.0.7.apk
     ├─ Watching-win-x64-selfcontained/
     └─ Watching-win-x64-framework/
 ```
@@ -662,11 +682,22 @@ Android 7.x 不支持矢量启动图标，会在启动时崩溃。现在已改�
 - 密码门禁：无密码可直接进设置；有密码必须输对；开启远程控制需二次验证
 - 远程控制门禁：关闭时拒绝注入并回复错误；开启后服务端光标真实移动
 - APK 构建与签名：v2 + v3 校验通过，包含 arm64-v8a 与 armeabi-v7a 两套原生库
+- **触摸手势 → 控制消息**（`tools/gesture-verify.mjs`，真实浏览器 + 真实服务端，7/7 通过）：
+  点按 = `move` + 左键 down/up；长按 480ms = `move` + **右键 down/up**（且不残留左键）；
+  拖动 = 1 次左键 down + 多个 move + 1 次 up；双指上滑 = 滚轮 `-120`、下滑 = `+120`；
+  双指张开被识别为缩放、不发滚轮
+- **控制消息 → 真实程序**（`tools/inject-verify.mjs`，3/3 通过）：注入的右键被一个真实网页收到
+  （`contextmenu` 触发 1 次）；滚轮 `-600` 让真实窗口从 0 滚到 500px，`+600` 又滚回 0
 
 **未验证 ⚠️**
 
 - **App 在真机上的界面启动**：构建环境是没有嵌套虚拟化的虚拟机，跑不了安卓模拟器，也没有真机接入。
   App 界面用的是标准 Android API 且通过编译期类型检查，但请在真机上点一下确认；若有闪退欢迎提 Issue 附日志。
+- **安卓端的手势是同一套逻辑的另一份实现**（C# / `MotionEvent`，见 `MainActivity.OnRemoteTouch`），
+  上面的手势验证跑的是网页端那份；安卓那份只过了编译期检查，没在真机上摸过。
+
+> ⚠️ 上面两个 `*-verify.mjs` 会**真的操作当前这台电脑的鼠标和键盘**（移动光标、点右键、发 Esc、滚动窗口），
+> 必须在没人用电脑的时候才跑。它们默认拒绝启动，要显式设置 `WATCHING_ALLOW_INPUT_TESTS=1` 才继续。
 
 ---
 

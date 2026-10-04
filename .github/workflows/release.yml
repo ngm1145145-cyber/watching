@@ -1,0 +1,115 @@
+# 打 tag 时自动构建 Windows 端与安卓 APK，并作为附件发到 GitHub Release。
+#
+# 用法：
+#   git tag v1.0.0
+#   git push origin v1.0.0
+# 也可以在 Actions 页面手动触发（workflow_dispatch），只构建不发版。
+
+name: build-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows 服务端 + 电脑客户端
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: 构建自包含版（自带运行时）
+        run: >
+          dotnet publish src/Watching/Watching.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=false
+          -o out/selfcontained
+
+      - name: 构建轻量版（需 .NET 10 桌面运行时）
+        run: >
+          dotnet publish src/Watching/Watching.csproj
+          -c Release -r win-x64 --self-contained false
+          -o out/framework
+
+      - name: 把快捷脚本放进包里
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out/selfcontained/shortcuts | Out-Null
+          New-Item -ItemType Directory -Force out/framework/shortcuts | Out-Null
+          Copy-Item scripts/* out/selfcontained/shortcuts -Force
+          Copy-Item scripts/* out/framework/shortcuts -Force
+
+      - name: 打包 zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path out/selfcontained/* -DestinationPath out/Watching-win-x64-selfcontained.zip -Force
+          Compress-Archive -Path out/framework/*     -DestinationPath out/Watching-win-x64-framework.zip -Force
+          Get-ChildItem out/*.zip | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zips
+          path: out/*.zip
+          retention-days: 7
+
+      - name: 附加到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.zip
+          generate_release_notes: true
+
+  android:
+    name: 安卓 APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 安装 .NET Android 工作负载
+        run: dotnet workload install android
+
+      - name: 编译 APK
+        run: >
+          dotnet publish src/WatchingMobile/WatchingMobile.csproj
+          -c Release -f net10.0-android
+          -p:AndroidPackageFormat=apk
+          -p:AndroidSdkDirectory=$ANDROID_SDK_ROOT
+          -p:JavaSdkDirectory=$JAVA_HOME
+          -o out/android
+
+      - name: 整理产物
+        run: |
+          mkdir -p out/apk
+          find out/android -name "*-Signed.apk" -exec cp {} out/apk/WatchingMobile.apk \;
+          ls -lh out/apk/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: out/apk/*.apk
+          retention-days: 7
+
+      - name: 附加到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/apk/*.apk
+          generate_release_notes: true

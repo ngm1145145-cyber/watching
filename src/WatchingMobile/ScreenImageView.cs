@@ -113,12 +113,49 @@ public sealed class ScreenImageView : ImageView
     /// <summary>控制模式：单指触摸当作鼠标，交给 MainActivity 转发；返回 true 表示已消费。</summary>
     public Func<MotionEvent, bool> RemoteTouchHandler { get; set; }
 
+    /// <summary>控制模式：双指触摸。返回 true = 已当作滚动消费；返回 false = 判定为缩放，交回本地处理。</summary>
+    public Func<MotionEvent, bool> RemoteMultiTouchHandler { get; set; }
+
+    /// <summary>第二根手指落下时调用：释放可能还按着的左键、取消长按计时。</summary>
+    public Action RemoteGestureCancel { get; set; }
+
+    private bool _remoteSingleActive;
+
     public override bool OnTouchEvent(MotionEvent e)
     {
-        // 控制模式下单指直接当鼠标用（双指仍然用于缩放）
-        if (RemoteTouchHandler != null && e.PointerCount <= 1)
+        _activePointers = e.PointerCount;
+
+        if (RemoteTouchHandler != null)
         {
-            if (RemoteTouchHandler(e)) return true;
+            if (e.PointerCount >= 2)
+            {
+                // 第二根手指落下 → 结束单指会话，避免残留的左键按下
+                if (e.ActionMasked == MotionEventActions.PointerDown && _remoteSingleActive)
+                {
+                    _remoteSingleActive = false;
+                    RemoteGestureCancel?.Invoke();
+                }
+
+                if (RemoteMultiTouchHandler != null && RemoteMultiTouchHandler(e)) return true;
+                // 未消费（判定为缩放）→ 落到下面交给缩放检测器
+            }
+            else if (_remoteSingleActive)
+            {
+                bool consumed = RemoteTouchHandler(e);
+                if (e.ActionMasked == MotionEventActions.Up || e.ActionMasked == MotionEventActions.Cancel)
+                    _remoteSingleActive = false;
+                if (consumed) return true;
+            }
+            else if (e.ActionMasked == MotionEventActions.Down)
+            {
+                // 只有按在画面内才开始远程会话
+                _remoteSingleActive = RemoteTouchHandler(e);
+                if (_remoteSingleActive) return true;
+            }
+        }
+        else
+        {
+            _remoteSingleActive = false;
         }
 
         _gestureDetector.OnTouchEvent(e);
@@ -129,15 +166,6 @@ public sealed class ScreenImageView : ImageView
             case MotionEventActions.Down:
                 _lastTouchX = e.GetX();
                 _lastTouchY = e.GetY();
-                _activePointers = 1;
-                break;
-
-            case MotionEventActions.PointerDown:
-                _activePointers++;
-                break;
-
-            case MotionEventActions.PointerUp:
-                _activePointers = Math.Max(1, _activePointers - 1);
                 break;
 
             case MotionEventActions.Move:

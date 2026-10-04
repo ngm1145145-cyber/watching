@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
@@ -286,6 +286,7 @@
         <ul>
           <li>双击画面进 / 出沉浸式全屏</li>
           <li>双指捏合缩放、单指拖动平移</li>
+          <li>开启控制后：点按 = 左键、长按 = 右键、双指上下滑 = 滚轮</li>
           <li>记住地址，下次直接连</li>
           <li>退到后台自动断开省电，回来自动重连</li>
           <li>支持 <code>adb install</code>，不用应用商店</li>
@@ -363,6 +364,8 @@
         <h3>手机 / 网页</h3>
         <p>手机 App 里填一次 IP 就记住，之后打开即连；顶部一条常驻信息显示实时 fps、码率和画面尺寸。</p>
         <p style="margin-top:8px">双击画面 = 全屏，双指捏合 = 缩放，单指拖动 = 平移，按钮可切画质 / 截图 / 断开。</p>
+        <p style="margin-top:8px">控制模式下：<b>点按 = 左键单击</b>、<b>拖动 = 按住左键拖</b>、<b>长按 0.5 秒 = 右键单击</b>、
+          <b>双指上下滑 = 滚轮</b>（手机 App 和手机网页手势完全一致）。</p>
       </div>
 
       <div class="card">
@@ -407,7 +410,7 @@
 
       <div class="step">
         <div class="h"><span class="num"></span><b>在 B（手机）上看</b></div>
-        <p class="muted" style="margin:0 0 10px">装 APK（<code>WatchingMobile-1.0.6.apk</code>），App 里填 A 的 IP；懒得装就用浏览器打开：</p>
+        <p class="muted" style="margin:0 0 10px">装 APK（<code>WatchingMobile-1.0.7.apk</code>），App 里填 A 的 IP；懒得装就用浏览器打开：</p>
         <pre><code>http://192.168.1.8:8899/</code></pre>
         <div class="copybar"><button class="copybtn" data-copy="http://192.168.1.8:8899/">复制</button>
           <span class="kbd-hint">不知道 A 的 IP？托盘图标右键，菜单里直接列出来了</span></div>
@@ -553,7 +556,7 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 `
     -SdkDir "D:\android-sdk" -JdkDir "C:\jdk-17"
 
 # 安装到手机
-adb install -r dist\apk\WatchingMobile-1.0.6.apk</code></pre>
+adb install -r dist\apk\WatchingMobile-1.0.7.apk</code></pre>
       </div>
     </div>
   </div>

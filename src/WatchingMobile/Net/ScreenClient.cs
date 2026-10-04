@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -125,7 +125,7 @@ public sealed class ScreenClient : IDisposable
                     Type = "hello",
                     Kind = "mobile",
                     Name = ClientName,
-                    Version = "1.0.6"
+                    Version = "1.0.7"
                 }.ToJson(), ct).ConfigureAwait(false);
 
                 _statTick = Environment.TickCount64;

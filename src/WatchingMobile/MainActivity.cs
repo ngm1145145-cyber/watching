@@ -56,6 +56,22 @@ public class MainActivity : Activity
     private bool _controlMode;
     private bool _remoteKeyDown;
 
+    // 单指手势状态
+    private float _remoteStartX, _remoteStartY;      // 控件坐标（判定位移用）
+    private float _remoteCurNx, _remoteCurNy;        // 归一化当前位置
+    private float _remoteMoved;                      // 最大位移（控件像素）
+    private bool _remoteLongPressFired;
+
+    // 长按 = 右键
+    private Handler _longPressHandler;
+    private Java.Lang.Runnable _longPressRunnable;
+
+    // 双指滚动
+    private bool _twoFingerActive;
+    private float _twoFingerStartDist;
+    private float _twoFingerLastY;
+    private float _twoFingerAcc;
+
     private ScreenClient _client;
     private bool _fullscreen;
     private bool _hudVisible = true;
@@ -271,8 +287,10 @@ public class MainActivity : Activity
 
         _image = new ScreenImageView(this);
         _image.DoubleTapped += ToggleImmersive;
-        // 控制模式下，单指触摸当作鼠标转发给服务端
-        _image.RemoteTouchHandler = OnRemoteTouch;
+        // 控制模式下：单指当鼠标，双指当滚轮/缩放
+        _image.RemoteTouchHandler = e => OnRemoteTouch(e, false);
+        _image.RemoteMultiTouchHandler = e => OnRemoteTouch(e, true);
+        _image.RemoteGestureCancel = OnRemoteGestureCancel;
         _viewerPanel.AddView(_image, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
@@ -712,13 +730,16 @@ public class MainActivity : Activity
 
         if (_controlMode)
         {
-            _controlHint.Text = "点按=单击，按住拖动=按住左键";
+            _controlHint.Text = ControlHintText;
             _image.FitToScreen = true;   // 控制时用适应窗口，坐标最直观
         }
         else
         {
             _controlHint.Text = "";
             _remoteKeyDown = false;
+            CancelLongPressWatch();
+            _twoFingerActive = false;
+            _twoFingerAcc = 0;
             HideSoftKeyboard();
         }
     }
@@ -737,32 +758,149 @@ public class MainActivity : Activity
         }
     }
 
-    /// <summary>单指触摸 → 鼠标事件。</summary>
-    private bool OnRemoteTouch(MotionEvent e)
+    /// <summary>
+    /// 触摸 → 鼠标事件。支持：
+    ///   单指点按 = 左键单击；单指拖动 = 按住左键拖动；长按 = 右键单击；双指上下滑 = 滚轮。
+    /// </summary>
+    private bool OnRemoteTouch(MotionEvent e, bool allowMultiTouch)
     {
         if (!_controlMode || _client == null) return false;
 
+        // ---------- 双指上下滑 = 滚动（距离稳定时按滚动处理，明显变化时留给缩放手势） ----------
+        if (allowMultiTouch && e.PointerCount >= 2)
+        {
+            // 只有两根手指都落在画面上才算滚动，否则还给本地缩放
+            if (!_image.TryMapToImage(e.GetX(0), e.GetY(0), out _, out _)) return false;
+            if (!_image.TryMapToImage(e.GetX(1), e.GetY(1), out _, out _)) return false;
+
+            float dist = (float)Math.Sqrt((e.GetX(1) - e.GetX(0)) * (e.GetX(1) - e.GetX(0)) +
+                                          (e.GetY(1) - e.GetY(0)) * (e.GetY(1) - e.GetY(0)));
+            float midY = (e.GetY(0) + e.GetY(1)) / 2f;
+
+            switch (e.ActionMasked)
+            {
+                case MotionEventActions.PointerDown:
+                    _twoFingerActive = true;
+                    _twoFingerStartDist = dist;
+                    _twoFingerLastY = midY;
+                    _twoFingerAcc = 0;
+                    break;
+
+                case MotionEventActions.Move:
+                    if (!_twoFingerActive)
+                    {
+                        _twoFingerActive = true;
+                        _twoFingerStartDist = dist;
+                        _twoFingerLastY = midY;
+                        _twoFingerAcc = 0;
+                        break;
+                    }
+
+                    float ratio = _twoFingerStartDist > 1 ? dist / _twoFingerStartDist : 1f;
+
+                    // 距离基本没变 → 当作滚动；明显变化 → 交给缩放手势
+                    if (ratio > 0.85f && ratio < 1.15f)
+                    {
+                        // 手指上滑 = 内容跟着往上走 = 滚轮向下（和触屏直觉一致）
+                        _twoFingerAcc += _twoFingerLastY - midY;
+                        _twoFingerLastY = midY;
+
+                        const float Notch = 60f;                    // 每 60px 算一格滚轮
+                        if (Math.Abs(_twoFingerAcc) >= Notch)
+                        {
+                            int notches = (int)(_twoFingerAcc / Notch);
+                            _twoFingerAcc -= notches * Notch;
+                            int delta = notches > 0 ? -120 : 120;
+                            for (int i = 0; i < Math.Min(Math.Abs(notches), 5); i++)
+                            {
+                                _client.Send(new ClientMessage
+                                {
+                                    Type = "input",
+                                    Kind = "wheel",
+                                    Delta = delta
+                                });
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // 明显缩放：让 ScreenImageView 自己处理缩放，本轮不当作滚动
+                        return false;
+                    }
+                    break;
+
+                case MotionEventActions.PointerUp:
+                case MotionEventActions.Up:
+                case MotionEventActions.Cancel:
+                    _twoFingerActive = false;
+                    _twoFingerAcc = 0;
+                    break;
+            }
+
+            return true;   // 消费掉，避免本地缩放
+        }
+
+        // ---------- 单指 ----------
         float nx, ny;
         if (!_image.TryMapToImage(e.GetX(), e.GetY(), out nx, out ny)) return false;
 
         switch (e.ActionMasked)
         {
             case MotionEventActions.Down:
-                _remoteKeyDown = true;
+                _remoteCurNx = nx;
+                _remoteCurNy = ny;
+                _remoteMoved = 0;
+                _remoteKeyDown = false;
+                _remoteLongPressFired = false;
+                _remoteStartX = e.GetX();
+                _remoteStartY = e.GetY();
+
+                // 按下的位置先报给服务端；左键 down 推迟到确认是拖动时再发
                 _client.Send(new ClientMessage { Type = "input", Kind = "move", X = nx, Y = ny });
-                _client.Send(new ClientMessage { Type = "input", Kind = "down", Button = "left", X = nx, Y = ny });
+                StartLongPressWatch();
                 return true;
 
             case MotionEventActions.Move:
+                _remoteCurNx = nx;
+                _remoteCurNy = ny;
+                _remoteMoved = Math.Max(_remoteMoved,
+                    (float)Math.Sqrt((e.GetX() - _remoteStartX) * (e.GetX() - _remoteStartX) +
+                                     (e.GetY() - _remoteStartY) * (e.GetY() - _remoteStartY)));
+
+                if (_remoteLongPressFired) return true;      // 右键已发，忽略后续移动
+
+                // 动了就取消长按
+                if (_remoteMoved >= MoveSlop) CancelLongPressWatch();
+
+                // 位移超过阈值 → 升级成「按住左键拖动」
+                if (!_remoteKeyDown && _remoteMoved >= MoveSlop)
+                {
+                    _remoteKeyDown = true;
+                    _client.Send(new ClientMessage { Type = "input", Kind = "down", Button = "left", X = nx, Y = ny });
+                }
+
                 _client.Send(new ClientMessage { Type = "input", Kind = "move", X = nx, Y = ny });
                 return true;
 
             case MotionEventActions.Up:
-                _client.Send(new ClientMessage { Type = "input", Kind = "up", Button = "left", X = nx, Y = ny });
-                _remoteKeyDown = false;
+                CancelLongPressWatch();
+                if (_remoteLongPressFired) { _remoteLongPressFired = false; return true; }
+
+                if (_remoteKeyDown)
+                {
+                    _client.Send(new ClientMessage { Type = "input", Kind = "up", Button = "left", X = nx, Y = ny });
+                    _remoteKeyDown = false;
+                }
+                else
+                {
+                    // 位移很小 = 单击：这时才补上左键 down+up
+                    _client.Send(new ClientMessage { Type = "input", Kind = "down", Button = "left", X = nx, Y = ny });
+                    _client.Send(new ClientMessage { Type = "input", Kind = "up", Button = "left", X = nx, Y = ny });
+                }
                 return true;
 
             case MotionEventActions.Cancel:
+                CancelLongPressWatch();
                 if (_remoteKeyDown)
                 {
                     _client.Send(new ClientMessage { Type = "input", Kind = "up", Button = "left", X = nx, Y = ny });
@@ -772,6 +910,106 @@ public class MainActivity : Activity
         }
 
         return false;
+    }
+
+    // ---- 长按 = 右键 ----
+
+    /// <summary>长按阈值：480ms。比双击间隔(300ms)长、比单击响应(120ms)长，
+    /// 又不会让人觉得"按了半天没反应"。</summary>
+    private const int LongPressMs = 480;
+    private const float MoveSlop = 8f;
+    private const string ControlHintText = "点按=单击 · 拖动=按住左键 · 长按=右键 · 双指上下滑=滚动";
+
+    private void StartLongPressWatch()
+    {
+        CancelLongPressWatch();
+        var handler = new Handler(Looper.MainLooper);
+        _longPressRunnable = new Java.Lang.Runnable(() =>
+        {
+            if (!_controlMode || _client == null) return;
+            if (_remoteMoved >= MoveSlop || _remoteKeyDown || _remoteLongPressFired) return;
+
+            // 按下的那一刻已经发过 move 了，这里补一次右键 down + up
+            _client.Send(new ClientMessage { Type = "input", Kind = "move", X = _remoteCurNx, Y = _remoteCurNy });
+            _client.Send(new ClientMessage { Type = "input", Kind = "down", Button = "right", X = _remoteCurNx, Y = _remoteCurNy });
+            _client.Send(new ClientMessage { Type = "input", Kind = "up", Button = "right", X = _remoteCurNx, Y = _remoteCurNy });
+
+            _remoteLongPressFired = true;
+            VibrateShort();
+            ShowHint("已发送右键单击");
+
+            // 1.2 秒后把提示条恢复成手势说明
+            handler.PostDelayed(new Java.Lang.Runnable(() =>
+            {
+                if (_controlHint != null && _controlMode) _controlHint.Text = ControlHintText;
+            }), 1200);
+        });
+        handler.PostDelayed(_longPressRunnable, LongPressMs);
+        _longPressHandler = handler;
+    }
+
+    private void CancelLongPressWatch()
+    {
+        if (_longPressHandler != null && _longPressRunnable != null)
+        {
+            _longPressHandler.RemoveCallbacks(_longPressRunnable);
+        }
+        _longPressHandler = null;
+        _longPressRunnable = null;
+    }
+
+    /// <summary>第二根手指落下时调用：结束单指会话，别留下按住的左键或没取消的右键计时。</summary>
+    private void OnRemoteGestureCancel()
+    {
+        CancelLongPressWatch();
+        _remoteLongPressFired = false;
+
+        if (_client != null && _remoteKeyDown)
+        {
+            _client.Send(new ClientMessage
+            {
+                Type = "input", Kind = "up", Button = "left",
+                X = _remoteCurNx, Y = _remoteCurNy
+            });
+            _remoteKeyDown = false;
+        }
+
+        _twoFingerActive = true;
+    }
+
+    private void ShowHint(string text)
+    {
+        if (_controlHint != null) _controlHint.Text = text;
+    }
+
+    private void VibrateShort()
+    {
+        try
+        {
+            Vibrator v;
+            if (OperatingSystem.IsAndroidVersionAtLeast(31))
+            {
+                v = (GetSystemService(VibratorManagerService) as VibratorManager)?.DefaultVibrator;
+            }
+            else
+            {
+#pragma warning disable CA1422 // API 31 之前只有 Context.VibratorService
+                v = GetSystemService(VibratorService) as Vibrator;
+#pragma warning restore CA1422
+            }
+            if (v == null) return;
+
+            if (OperatingSystem.IsAndroidVersionAtLeast(26))
+                v.Vibrate(VibrationEffect.CreateOneShot(30, 80));
+            else
+#pragma warning disable CA1422 // API 26 之前只有 Vibrate(long)
+                v.Vibrate(30);
+#pragma warning restore CA1422
+        }
+        catch
+        {
+            // 没有振动权限或无马达：静默忽略
+        }
     }
 
     private void ShowSoftKeyboard()

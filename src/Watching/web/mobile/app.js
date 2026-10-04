@@ -466,6 +466,26 @@
   Viewer.prototype.attachGestures = function (el) {
     var self = this;
 
+    /// 结束一次单指操作：位移小=单击，位移大=拖拽（拖拽时才发左键 down/up）
+    function finishSingle(st, endT) {
+      if (!st || !self.control || st.singleDone) return;
+
+      var p = endT ? self.toNormalized(endT.clientX, endT.clientY) : st.remoteStart;
+      p = p || st.remoteStart;
+      if (!p) return;
+
+      if (st.dragging) {
+        self.sendPointer('move', p);
+        self.sendPointer('up', p, 'left');
+      } else {
+        // 延迟到确认是「单击」才发，避免长按右键时残留一个按住的左键
+        self.sendPointer('move', p);
+        self.sendPointer('down', p, 'left');
+        self.sendPointer('up', p, 'left');
+      }
+      st.singleDone = true;
+    }
+
     el.addEventListener('touchstart', function (e) {
       if (e.touches.length === 2) {
         var dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -475,56 +495,117 @@
           dist: Math.hypot(dx, dy),
           zoom: self.zoom,
           mid: [(e.touches[0].clientX + e.touches[1].clientX) / 2,
-                (e.touches[0].clientY + e.touches[1].clientY) / 2]
+                (e.touches[0].clientY + e.touches[1].clientY) / 2],
+          // 双指：距离基本不变 = 滚动；明显变化 = 缩放
+          scrollAcc: 0,
+          scrollStartY: (e.touches[0].clientY + e.touches[1].clientY) / 2
         };
         e.preventDefault();
-      } else if (e.touches.length === 1) {
-        var p0 = self.control ? self.toNormalized(e.touches[0].clientX, e.touches[0].clientY) : null;
-        self.touchState = {
-          mode: 'pan',
-          x: e.touches[0].clientX, y: e.touches[0].clientY,
-          offset: [self.offset[0], self.offset[1]],
-          moved: 0,
-          remoteStart: p0,
-          remoteDown: false,
-          lastSent: 0
-        };
-        // 控制模式下按下即按住左键（拖动窗口 / 划选文字）
-        if (p0) {
-          self.touchState.remoteDown = true;
-          self.sendPointer('down', p0, 'left');
-        }
+        return;
+      }
+
+      if (e.touches.length !== 1) return;
+
+      var t0 = e.touches[0];
+      var p0 = self.control ? self.toNormalized(t0.clientX, t0.clientY) : null;
+
+      var st = {
+        mode: 'pan',
+        x: t0.clientX, y: t0.clientY,
+        offset: [self.offset[0], self.offset[1]],
+        moved: 0,
+        remoteStart: p0,
+        dragging: false,      // 是否已经进入「按住左键拖动」
+        singleDone: false,    // 本次单指操作是否已处理完
+        lastSent: 0,
+        longPressFired: false,
+        timer: null
+      };
+      self.touchState = st;
+
+      // 长按 480ms 且几乎没动 = 右键单击
+      if (self.control && p0) {
+        st.timer = setTimeout(function () {
+          if (self.touchState !== st || st.moved >= 8 || st.dragging || st.singleDone) return;
+
+          // 按下的那一刻这个点已经通过 move 报给服务端了，这里直接补右键 down/up
+          self.sendPointer('move', p0);
+          self.sendPointer('down', p0, 'right');
+          self.sendPointer('up', p0, 'right');
+
+          st.longPressFired = true;
+          st.singleDone = true;
+          st.remoteStart = null;
+          if (self.opts.onLongPress) self.opts.onLongPress();
+        }, 480);
       }
     }, { passive: false });
 
     el.addEventListener('touchmove', function (e) {
       var st = self.touchState;
       if (!st) return;
+
+      // ---------- 双指：滚动 或 缩放 ----------
       if (st.mode === 'pinch' && e.touches.length === 2) {
         var dx = e.touches[0].clientX - e.touches[1].clientX;
         var dy = e.touches[0].clientY - e.touches[1].clientY;
         var dist = Math.hypot(dx, dy);
-        self.fit = false;
-        self.zoom = Math.max(0.2, Math.min(6, st.zoom * (dist / (st.dist || 1))));
-        self.dirty = true;
+        var midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        var ratio = dist / (st.dist || 1);
+
+        // 距离变化不大 → 当成滚动（发送滚轮）
+        if (self.control && ratio > 0.85 && ratio < 1.15) {
+          // 手指上滑 = 内容跟着往上走 = 滚轮向下（和触屏直觉一致）
+          var deltaY = st.scrollStartY - midY;
+          st.scrollAcc += deltaY;
+          st.scrollStartY = midY;
+
+          const NOTCH = 60;                          // 每 60px 算一格滚轮
+          if (Math.abs(st.scrollAcc) >= NOTCH) {
+            var notches = Math.trunc(st.scrollAcc / NOTCH);
+            st.scrollAcc -= notches * NOTCH;
+            self.send({ t: 'input', kind: 'wheel', delta: notches > 0 ? -120 : 120 });
+          }
+        } else {
+          // 距离明显变化 → 缩放
+          self.fit = false;
+          self.zoom = Math.max(0.2, Math.min(6, st.zoom * ratio));
+          self.dirty = true;
+        }
         e.preventDefault();
         return;
       }
 
+      // ---------- 单指 ----------
       if (st.mode === 'pan' && e.touches.length === 1) {
-        var mx = e.touches[0].clientX - st.x;
-        var my = e.touches[0].clientY - st.y;
+        var t1 = e.touches[0];
+        var mx = t1.clientX - st.x;
+        var my = t1.clientY - st.y;
         st.moved = Math.max(st.moved, Math.hypot(mx, my));
 
-        // 控制模式：把手指位置当作鼠标位置发给服务端（按 60Hz 限流）
         if (self.control) {
+          // 一动就取消长按（避免"要拖动却触发右键"）
+          if (st.timer && st.moved >= 8) {
+            clearTimeout(st.timer);
+            st.timer = null;
+          }
+
+          if (st.singleDone) { e.preventDefault(); return; }   // 右键已发，忽略后续
+
+          // 位移超过阈值才升级为「按住左键拖动」
+          if (!st.dragging && st.moved >= 8) {
+            if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+            st.dragging = true;
+            var pd = self.toNormalized(t1.clientX, t1.clientY);
+            if (pd) self.sendPointer('down', pd, 'left');
+          }
+
           var now = Date.now();
           if (now - st.lastSent >= 16) {
             st.lastSent = now;
-            var p = self.toNormalized(e.touches[0].clientX, e.touches[0].clientY);
+            var p = self.toNormalized(t1.clientX, t1.clientY);
             if (p) self.sendPointer('move', p);
           }
-          // 阻止长按选中文字 / 橡皮筋等浏览器默认行为
           e.preventDefault();
         }
 
@@ -541,33 +622,31 @@
     el.addEventListener('touchend', function (e) {
       var st = self.touchState;
       self.touchState = null;
+      if (!st) return;
 
-      if (!st || st.mode !== 'pan' || e.touches.length !== 0) return;
+      if (st.timer) { clearTimeout(st.timer); st.timer = null; }
 
-      if (st.remoteDown && self.control) {
-        // 松手：位移很小 = 单击；否则是拖拽（已经发过 down+move，补一个 up）
+      if (st.mode === 'pan' && e.touches.length === 0) {
         var endT = e.changedTouches && e.changedTouches[0];
-        var p = endT ? self.toNormalized(endT.clientX, endT.clientY) : st.remoteStart;
-        self.sendPointer('up', p || st.remoteStart, 'left');
-        st.remoteDown = false;
 
-        if (st.moved < 8) {
-          // 单击（服务端会收到 down+up，等价于一次点击）
+        if (self.control && !st.longPressFired) {
+          finishSingle(st, endT);
           return;
         }
-        return;
-      }
 
-      if (st.moved < 8) {
-        var now = Date.now();
-        if (now - self.lastTap < 300) {
-          self.lastTap = 0;
-          if (self.opts.onDoubleTap) self.opts.onDoubleTap();
-        } else {
-          self.lastTap = now;
-          if (self.opts.onTap) setTimeout(function () {
-            if (self.lastTap !== 0) self.opts.onTap();
-          }, 300);
+        // 非控制模式（或已发右键）：保留单击/双击切换 HUD
+        // 已经发过右键的那次触摸不再算「点按」，免得右键顺带把 HUD 也切了
+        if (st.moved < 8 && !st.longPressFired) {
+          var now = Date.now();
+          if (now - self.lastTap < 300) {
+            self.lastTap = 0;
+            if (self.opts.onDoubleTap) self.opts.onDoubleTap();
+          } else {
+            self.lastTap = now;
+            if (self.opts.onTap) setTimeout(function () {
+              if (self.lastTap !== 0) self.opts.onTap();
+            }, 300);
+          }
         }
       }
     }, { passive: true });

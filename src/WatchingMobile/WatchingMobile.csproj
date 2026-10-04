@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0-android</TargetFramework>
@@ -10,7 +10,7 @@
     <AssemblyName>WatchingMobile</AssemblyName>
     <ApplicationId>com.watching.mobile</ApplicationId>
     <ApplicationVersion>1</ApplicationVersion>
-    <ApplicationDisplayVersion>1.0.6</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>1.0.7</ApplicationDisplayVersion>
 
     <!-- 直接产出可安装的 APK -->
     <AndroidPackageFormat>apk</AndroidPackageFormat>
@@ -19,9 +19,9 @@
     <RuntimeIdentifiers>android-arm64;android-arm</RuntimeIdentifiers>
     <PublishTrimmed>false</PublishTrimmed>
 
-    <!-- 本机 Android SDK / JDK 路径（编译机器相关，可按需覆盖） -->
-    <AndroidSdkDirectory Condition="'$(AndroidSdkDirectory)' == ''">H:\ds-harness\android-sdk</AndroidSdkDirectory>
-    <JavaSdkDirectory Condition="'$(JavaSdkDirectory)' == ''">G:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot</JavaSdkDirectory>
+    <!-- 本机 Android SDK / JDK 路径（仅 Windows 开发机生效；CI 上留空由工具链自己找） -->
+    <AndroidSdkDirectory Condition="'$(AndroidSdkDirectory)' == '' AND $([MSBuild]::IsOSPlatform('Windows'))">H:\ds-harness\android-sdk</AndroidSdkDirectory>
+    <JavaSdkDirectory Condition="'$(JavaSdkDirectory)' == '' AND $([MSBuild]::IsOSPlatform('Windows')) AND Exists('G:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot')">G:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot</JavaSdkDirectory>
 
     <AndroidManifest>Properties\AndroidManifest.xml</AndroidManifest>
     <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
