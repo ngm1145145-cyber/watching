@@ -41,8 +41,8 @@
 | 文件 | 大小 | 给谁用 |
 | --- | --- | --- |
 | `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
-| `Watching-win-x64-framework.zip` | 0.16 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
-| `WatchingMobile-1.0.7.apk` | 39.4 MB | 安卓手机 |
+| `Watching-win-x64-framework.zip` | 0.2 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
+| `WatchingMobile-1.0.7.apk` | 39.5 MB | 安卓手机 |
 
 > 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
 > `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
