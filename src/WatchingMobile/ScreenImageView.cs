@@ -110,6 +110,28 @@ public sealed class ScreenImageView : ImageView
         return true;
     }
 
+    /// <summary>
+    /// 同上，但落在画面外时**夹到边缘**而不是失败。
+    /// 手指从画面里拖到黑边（竖屏看 16:9 桌面时上下黑边很宽）时，
+    /// 之前的实现会直接返回 false，导致「松手了却没发 up」——
+    /// 对方电脑的鼠标左键就一直按着不放，长按计时器也会在手指抬起后误触发右键。
+    /// </summary>
+    public bool TryMapToImageClamped(float viewX, float viewY, out float nx, out float ny)
+    {
+        nx = ny = 0.5f;
+        if (_sourceWidth <= 0 || _sourceHeight <= 0) return false;
+
+        using var inverse = new Matrix();
+        if (!_matrix.Invert(inverse)) return false;
+
+        var pts = new float[] { viewX, viewY };
+        inverse.MapPoints(pts);
+
+        nx = Math.Clamp(pts[0] / _sourceWidth, 0f, 1f);
+        ny = Math.Clamp(pts[1] / _sourceHeight, 0f, 1f);
+        return true;
+    }
+
     /// <summary>控制模式：单指触摸当作鼠标，交给 MainActivity 转发；返回 true 表示已消费。</summary>
     public Func<MotionEvent, bool> RemoteTouchHandler { get; set; }
 

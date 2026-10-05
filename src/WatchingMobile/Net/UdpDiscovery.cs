@@ -81,10 +81,16 @@ public sealed class UdpDiscovery
             }
 
             long deadline = System.Environment.TickCount64 + timeoutMs;
+
+            // 整段搜索窗口只挂一个接收任务。
+            // 以前的写法是每 400ms 超时就重新 ReceiveAsync 一次，被丢下的那些接收任务
+            // 仍然挂在同一个 socket 上：服务端的回包要是晚到一点，就被某个没人读的
+            // 接收任务吃掉丢掉了 —— 表现就是「服务端明明回了，手机却搜不到」。
+            var receive = udp.ReceiveAsync();
+
             while (System.Environment.TickCount64 < deadline && !ct.IsCancellationRequested)
             {
                 int remain = (int)Math.Max(1, deadline - System.Environment.TickCount64);
-                var receive = udp.ReceiveAsync();
                 var done = await Task.WhenAny(receive, Task.Delay(Math.Min(remain, 400), ct)).ConfigureAwait(false);
                 if (done != receive) continue;
 
@@ -94,13 +100,17 @@ public sealed class UdpDiscovery
                     var server = JsonSerializer.Deserialize<DiscoveredServer>(
                         Encoding.UTF8.GetString(result.Buffer), JsonOpts);
 
-                    if (server == null || string.IsNullOrEmpty(server.Host)) continue;
-                    if (!string.Equals(server.Magic, "WATCHING/1", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (server.Port <= 0) server.Port = port;
-
-                    found[$"{server.Host}:{server.Port}"] = server;
+                    if (server != null && !string.IsNullOrEmpty(server.Host) &&
+                        string.Equals(server.Magic, "WATCHING/1", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (server.Port <= 0) server.Port = port;
+                        found[$"{server.Host}:{server.Port}"] = server;
+                    }
                 }
                 catch { }
+
+                if (ct.IsCancellationRequested) break;
+                receive = udp.ReceiveAsync();   // 收到一条再挂下一条
             }
         }
         catch (Exception ex)

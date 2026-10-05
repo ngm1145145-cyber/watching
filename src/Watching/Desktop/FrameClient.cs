@@ -103,10 +103,24 @@ public sealed class FrameClient : IDisposable
     {
         try { _pumpCts?.Cancel(); } catch { }
         try { _cts?.Cancel(); } catch { }
+
+        // 不要在 UI 线程上等 WebSocket 关闭握手：连接卡住时这里会白等 500ms，
+        // 界面就跟着假死。取消令牌之后让 RunAsync 自己去收尾。
         try
         {
             if (_ws != null && _ws.State == WebSocketState.Open)
-                _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None).Wait(500);
+            {
+                var ws = _ws;
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                        ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", timeout.Token).Wait(2000);
+                    }
+                    catch { }
+                });
+            }
         }
         catch { }
         SetState(ClientState.Closed);
@@ -398,17 +412,20 @@ public sealed class FrameClient : IDisposable
                 _dispatcher.BeginInvoke(new Action(() => StatsUpdated?.Invoke(this, snapshot)));
             }
 
-            // 合成（WriteableBitmap 写入）必须在 UI 线程做
-            _dispatcher.BeginInvoke(new Action(() => ApplyAndRaise(parsed)),
-                DispatcherPriority.Render);
+            // 合成（WriteableBitmap 写入）必须在 UI 线程做。
+            // _pendingFrames 表示「已排进 UI 队列、还没画完」的帧数，
+            // 减一必须放在 UI 线程的委托里：以前在 finally 里立刻减，
+            // 计数永远回到 0，上面那个 >3 的丢帧判断等于永远不成立，
+            // UI 卡住时排队的帧（每帧几十上百 KB）会一直堆着。
+            _dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { ApplyAndRaise(parsed); }
+                finally { Interlocked.Decrement(ref _pendingFrames); }
+            }), DispatcherPriority.Render);
         }
         catch
         {
-            // 忽略坏帧
-        }
-        finally
-        {
-            Interlocked.Decrement(ref _pendingFrames);
+            Interlocked.Decrement(ref _pendingFrames);   // 坏帧：自己把计数还回去
         }
     }
 

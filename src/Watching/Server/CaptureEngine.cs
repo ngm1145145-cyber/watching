@@ -113,12 +113,17 @@ public sealed class CaptureEngine : IDisposable
 
     public bool TryGetLatest(out byte[] jpeg, out long seq, out int w, out int h, out bool cropped)
     {
-        jpeg = _latest;
-        seq = Interlocked.Read(ref _seq);
-        w = _frameW;
-        h = _frameH;
-        cropped = !_crop.IsEmpty;
-        return jpeg != null;
+        // 必须和 Publish 用同一把锁读：否则可能拿到「第 N 帧的图 + 第 N+1 帧的宽高」，
+        // 改分辨率 / 改画质那一瞬间客户端就会按错误的尺寸去贴画面
+        lock (_gate)
+        {
+            jpeg = _latest;
+            seq = _seq;
+            w = _frameW;
+            h = _frameH;
+            cropped = !_crop.IsEmpty;
+            return jpeg != null;
+        }
     }
 
     /// <summary>等待比 sinceSeq 更新的一帧，最多等 timeoutMs 毫秒。</summary>
@@ -177,6 +182,12 @@ public sealed class CaptureEngine : IDisposable
 
     private void Publish()
     {
+        // 先取再清！以前是「用 _forceKeyFrame 处理完这一帧、最后再置 false」，
+        // 于是在抓屏 + 编码这段时间里别人请求的关键帧会被这一句覆盖掉，
+        // 新接入的客户端就永远等不到基准整帧（桌面不动时干脆一直黑屏）。
+        bool forceKeyFrame = _forceKeyFrame;
+        _forceKeyFrame = false;
+
         Rectangle crop;
         int maxWidth;
         lock (_gate)
@@ -204,7 +215,7 @@ public sealed class CaptureEngine : IDisposable
         var deltaWatch = Stopwatch.StartNew();
         try
         {
-            delta = _delta.Process(_encoder.LastFrameBitmap, _quality, _forceKeyFrame,
+            delta = _delta.Process(_encoder.LastFrameBitmap, _quality, forceKeyFrame,
                 _encoder.JpegCodec, _encoder.JpegParams);
         }
         catch (Exception ex)
@@ -228,7 +239,6 @@ public sealed class CaptureEngine : IDisposable
                 _screenH = vs.Height;
                 _lastCaptureMs = sw.Elapsed.TotalMilliseconds;
             }
-            _forceKeyFrame = false;
             return;
         }
 
@@ -243,7 +253,6 @@ public sealed class CaptureEngine : IDisposable
             _lastCaptureMs = sw.Elapsed.TotalMilliseconds;
             Interlocked.Increment(ref _seq);
         }
-        _forceKeyFrame = false;
         _signal.Set();
     }
 
@@ -261,20 +270,40 @@ public sealed class CaptureEngine : IDisposable
     /// <summary>取最新一帧的「可发送内容」（整帧或若干变化分块）。</summary>
     public bool TryGetLatestDelta(out DeltaResult delta, out long seq, out int w, out int h)
     {
-        delta = _latestDelta;
-        seq = Interlocked.Read(ref _seq);
-        w = _frameW;
-        h = _frameH;
-        return delta != null;
+        // 同样必须在锁里读全，保证 delta / seq / 宽高 是同一帧的
+        lock (_gate)
+        {
+            delta = _latestDelta;
+            seq = _seq;
+            w = _frameW;
+            h = _frameH;
+            return delta != null;
+        }
     }
+
+    /// <summary>当前订阅数（客户端数）。自适应画质只在只有一个客户端时才敢动，
+    /// 否则一个慢客户端会把共享同一条流的其它客户端一起降画质。</summary>
+    public int SubscriberCount => _subscribers;
 
     public void Dispose()
     {
         _running = false;
         _signal.Set();
-        try { _thread?.Join(1500); } catch { }
+
+        bool stopped = false;
+        try { stopped = _thread == null || _thread.Join(1500); } catch { }
+
+        // 抓屏线程还活着的时候绝不能销毁 _signal / 编码器：
+        // 那个线程下一句就是 _signal.Wait/Set，会抛 ObjectDisposedException 把整个进程带走
         try { _delta.Dispose(); } catch { }
-        try { _encoder.Dispose(); } catch { }
-        try { _signal.Dispose(); } catch { }
+        if (stopped)
+        {
+            try { _encoder.Dispose(); } catch { }
+            try { _signal.Dispose(); } catch { }
+        }
+        else
+        {
+            Log.Write("抓屏线程 1.5 秒内没退出来，保留资源等它自己结束（避免释放后仍在使用）");
+        }
     }
 }

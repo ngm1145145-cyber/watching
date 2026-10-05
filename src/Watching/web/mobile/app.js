@@ -116,6 +116,10 @@
 
       ws.onopen = function () {
         self.connected = true;
+        // 新一路连接：丢掉上一路的基准画面和序号，避免把新会话的分块贴到旧画面上
+        self.base = null;
+        self.baseSeq = -1;
+        self.pending = null;
         self.retry = 0;
         self.dirty = true;
         self.send({
@@ -211,8 +215,11 @@
       return;
     }
 
-    // 增量帧：必须已有基准
+    // 增量帧：必须有基准，而且基准必须是同一块画面、同一尺寸、更新的序号。
+    // 重连或改了画质/分辨率后如果基准还是上一路的画面，把分块贴上去会整片错位。
     if (!this.base) return;
+    if (frame.seq <= this.baseSeq) return;
+    if (frame.meta && (frame.meta.w !== this.base.width || frame.meta.h !== this.base.height)) return;
 
     var ctx = this.base.getContext('2d');
     var remaining = frame.tiles.length;
@@ -440,6 +447,24 @@
       e.preventDefault();
     });
 
+    // 松手时鼠标可能在画布外面（HUD 上、窗口外、Alt-Tab 之后），
+    // 只监听画布的 mouseup 会漏掉，对方电脑的左键就一直按着不放（拖动/框选停不下来）。
+    // 所以窗口级兜底：任何地方松手、失焦、触摸取消都要把按键补上。
+    function releaseAnywhere(e) {
+      if (!self.control || !down) return;
+      var x = e && typeof e.clientX === 'number' ? e.clientX : null;
+      var y = e && typeof e.clientY === 'number' ? e.clientY : null;
+      down = false;
+      var p = (x === null) ? null : self.toNormalized(x, y);
+      if (!p) p = self.lastPoint || null;
+      if (!p) return;
+      var btn = e && e.button === 2 ? 'right' : (e && e.button === 1 ? 'middle' : 'left');
+      self.sendPointer('up', p, btn);
+    }
+    window.addEventListener('mouseup', releaseAnywhere, true);
+    window.addEventListener('blur', function () { releaseAnywhere(null); });
+    el.addEventListener('mouseleave', function (e) { if (down) releaseAnywhere(e); });
+
     el.addEventListener('contextmenu', function (e) { if (self.control) e.preventDefault(); });
 
     el.addEventListener('wheel', function (e) {
@@ -508,6 +533,11 @@
 
       var t0 = e.touches[0];
       var p0 = self.control ? self.toNormalized(t0.clientX, t0.clientY) : null;
+
+      // 控制模式下必须吃掉这次触摸：不吃的话浏览器会在 touchend 之后再补一套
+      // 合成的 mouse 事件，attachInput 又发一次 down/up —— 手机上点一下变成点两下，
+      // 长按还会弹出系统的文字选择/右键菜单。
+      if (self.control && p0) e.preventDefault();
 
       var st = {
         mode: 'pan',
@@ -653,6 +683,9 @@
 
     // 鼠标滚轮缩放（网页版）
     el.addEventListener('wheel', function (e) {
+      // 控制模式下滚轮是「操作对方电脑」，不能再顺手把本地画面缩放掉：
+      // 以前电脑网页端开着 wheelZoom，滚一下本地放大一次、对方也滚一次，很难用
+      if (self.control) return;
       if (!e.ctrlKey && !self.opts.wheelZoom) return;
       self.fit = false;
       self.zoom = Math.max(0.2, Math.min(6, self.zoom * (e.deltaY < 0 ? 1.1 : 0.9)));

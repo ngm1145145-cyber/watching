@@ -280,8 +280,13 @@ public sealed class DeltaEncoder : IDisposable
     }
 
     /// <summary>
-    /// 判断一块是否真的变了：隔行隔像素抽样，算平均绝对差，超过容差才算变化。
-    /// 这样能过滤掉渲染噪声，又不会漏掉真实变化（光标、文字、窗口）。
+    /// 判断一块是否真的变了。
+    ///
+    /// 隔行隔像素抽样算平均绝对差，可以过滤掉渲染/JPEG 噪声；但只看平均差会漏掉
+    /// 「变化很小但很实」的东西：一个文字光标、刚敲下去的一个字，在 128x128 的块里
+    /// 平均差不到 1，而容差是 3，于是这些地方要等到下一个整帧（150 帧 ≈ 7 秒）才更新。
+    /// 所以再加一条「有样点变化很大」的判据：噪声是每像素 ±2~3 的抖动，
+    /// 而光标/文字边缘是 100 以上的跳变，用 56 当阈值两边都不会误判。
     /// </summary>
     private bool TileChanged(byte[] cur, int imageWidth, Rectangle rect, byte[] prev)
     {
@@ -289,6 +294,7 @@ public sealed class DeltaEncoder : IDisposable
 
         long diff = 0;
         int samples = 0;
+        int maxDelta = 0;
 
         // 每 4 行 / 每 4 像素取样：128x128 的块约 1k 次取样，
         // 足以发现光标（32x32）级别的变化，又比逐像素快 16 倍。
@@ -298,16 +304,27 @@ public sealed class DeltaEncoder : IDisposable
             for (int x = rect.Left; x < rect.Right; x += 4)
             {
                 int i = rowBase + x * 4;
-                diff += Math.Abs(cur[i] - prev[i]);
-                diff += Math.Abs(cur[i + 1] - prev[i + 1]);
-                diff += Math.Abs(cur[i + 2] - prev[i + 2]);
+                int db = Math.Abs(cur[i] - prev[i]);
+                int dg = Math.Abs(cur[i + 1] - prev[i + 1]);
+                int dr = Math.Abs(cur[i + 2] - prev[i + 2]);
+
+                diff += db + dg + dr;
                 samples += 3;
+                if (db > maxDelta) maxDelta = db;
+                if (dg > maxDelta) maxDelta = dg;
+                if (dr > maxDelta) maxDelta = dr;
             }
         }
 
         if (samples == 0) return false;
-        return diff / (double)samples > NoiseTolerance;
+        if (diff / (double)samples > NoiseTolerance) return true;
+
+        // 平均差很小，但有明显跳变的样点：光标、小图标、单个字符
+        return maxDelta >= StrongChangeThreshold;
     }
+
+    /// <summary>单个样点算「确实变了」的阈值（0~255）。JPEG 噪声远低于它。</summary>
+    private const int StrongChangeThreshold = 56;
 
     public void Dispose()
     {

@@ -89,7 +89,14 @@ public sealed class ClientConnection : IDisposable
             _hub.Release(old);
             _lastSentSeq = -1;
         }
+        if (DebugSend)
+            Log.Write($"[SENDDBG] {Id} 绑定流 {stream.Key}（当前序号 {stream.Engine.Sequence}，" +
+                      $"订阅 {stream.Engine.SubscriberCount}，_lastSentSeq={_lastSentSeq}）");
     }
+
+    /// <summary>置 WATCHING_DEBUG_SEND=1 可以打印发送循环的每次判断，排查「连上没画面」用。</summary>
+    internal static readonly bool DebugSend =
+        Environment.GetEnvironmentVariable("WATCHING_DEBUG_SEND") == "1";
 
     private void DetachStream()
     {
@@ -122,6 +129,7 @@ public sealed class ClientConnection : IDisposable
     private async Task SendLoopAsync()
     {
         var pingClock = Stopwatch.StartNew();
+        var attachWatch = Stopwatch.StartNew();
         bool adaptive = _config.AdaptiveQuality;
         int effectiveQuality = _quality;
         int effectiveFps = _fps;
@@ -158,14 +166,27 @@ public sealed class ClientConnection : IDisposable
                 var stream = Volatile.Read(ref _streamRef);
                 if (stream == null)
                 {
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 还没有绑定的抓屏流");
                     await Task.Delay(50, _cts.Token).ConfigureAwait(false);
                     continue;
+                }
+
+                // 兜底看门狗：接入 1.5 秒还一帧都没发出去，就再要一次整帧。
+                // 「关键帧请求」只是一个布尔标志，抓屏线程要是正好在读它之后、发帧之前
+                // 这一小段里收到请求，就会被算进「下一帧」，极端时序下新客户端会一直
+                // 收不到基准画面（表现就是连上了却一直黑屏，最难排查的一类问题）。
+                if (_framesSent == 0 && attachWatch.ElapsedMilliseconds >= 1500)
+                {
+                    attachWatch.Restart();
+                    stream.Engine.RequestKeyFrame();
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 接入后仍未发出任何帧 → 再要一次整帧（引擎 {stream.Engine.Sequence}）");
                 }
 
                 // 4) 取最新一帧的可发送内容（整帧 或 只含变化分块的增量）
                 long seq = stream.Engine.Sequence;
                 if (seq == _lastSentSeq || !stream.Engine.Active)
                 {
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 等待新帧（引擎序号 {seq}，已发 {_lastSentSeq}，订阅 {stream.Engine.SubscriberCount}）");
                     stream.Engine.WaitForFrame(seq, 400);
                     continue;
                 }
@@ -179,6 +200,20 @@ public sealed class ClientConnection : IDisposable
 
                 if (seq == _lastSentSeq) continue;
                 if (_lastSentSeq >= 0 && seq - _lastSentSeq > Math.Max(3, _fps)) _framesDropped++;
+
+                // 增量帧是「相对上一帧」的差量。中间只要有一帧没发出去（拥塞丢帧、
+                // 或者刚才那条 continue），客户端手里的基准就不是这一帧的前一帧，
+                // 贴上去以后「只在被跳过那一帧变化」的地方会一直保留旧像素（花屏/残影），
+                // 一直撑到下一个整帧（默认 150 帧 ≈ 7 秒）才恢复。
+                // 所以发现跳号就主动要一个整帧，这一帧的增量直接丢弃。
+                if (!delta.IsFullFrame && (_lastSentSeq < 0 || seq != _lastSentSeq + 1))
+                {
+                    _resyncKeyFrames++;
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 跳号（引擎 {seq} / 已发 {_lastSentSeq}）→ 要整帧");
+                    stream.Engine.RequestKeyFrame();
+                    _lastSentSeq = seq;
+                    continue;
+                }
 
                 byte[] packet;
 
@@ -212,6 +247,7 @@ public sealed class ClientConnection : IDisposable
 
                 if (packet == null)
                 {
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 组包失败（seq={seq} delta={!delta.IsFullFrame}）");
                     await Task.Delay(20, _cts.Token).ConfigureAwait(false);
                     continue;
                 }
@@ -252,8 +288,11 @@ public sealed class ClientConnection : IDisposable
                 _sendMs = _sendMs <= 0 ? sendWatch.Elapsed.TotalMilliseconds
                                        : _sendMs * 0.7 + sendWatch.Elapsed.TotalMilliseconds * 0.3;
 
-                if (adaptive && stream.Engine is CaptureEngine engine && _framesSent % 8 == 0)
+                if (adaptive && stream.Engine is CaptureEngine engine && _framesSent % 8 == 0 &&
+                    engine.SubscriberCount <= 1)
                 {
+                    // 只有一个客户端才自适应：多个客户端共用同一条抓屏流时，
+                    // 给一个慢客户端降画质会连带把别人也降了
                     int targetFrameMs = (int)(1000.0 / Math.Max(1, _fps));
                     if (_sendMs > targetFrameMs * 0.8 && effectiveQuality > 40)
                     {
@@ -301,6 +340,7 @@ public sealed class ClientConnection : IDisposable
     private long _lastFrameLength = -1;
     private ulong _lastFrameHash;
     private long _framesSkipped;
+    private long _resyncKeyFrames;
     private long _fullFramesSent;
     private long _deltaFramesSent;
     private long _tilesSent;
@@ -544,10 +584,18 @@ public sealed class ClientConnection : IDisposable
                         InputInjector.MouseMove(ScreenX(msg.X.Value), ScreenY(msg.Y.Value));
                     break;
                 case "down":
+                    // 客户端每次都带了坐标：不先移动的话，两次操作之间本机用户（或另一个
+                    // 客户端）动过鼠标，这一下就会点到别的窗口上
+                    if (msg.X.HasValue && msg.Y.HasValue)
+                        InputInjector.MouseMove(ScreenX(msg.X.Value), ScreenY(msg.Y.Value));
                     InputInjector.MouseButton(msg.Button, true);
+                    _pressedButtons.Add(string.IsNullOrEmpty(msg.Button) ? "left" : msg.Button);
                     break;
                 case "up":
+                    if (msg.X.HasValue && msg.Y.HasValue)
+                        InputInjector.MouseMove(ScreenX(msg.X.Value), ScreenY(msg.Y.Value));
                     InputInjector.MouseButton(msg.Button, false);
+                    _pressedButtons.Remove(string.IsNullOrEmpty(msg.Button) ? "left" : msg.Button);
                     break;
                 case "click":
                     InputInjector.MouseMove(ScreenX(msg.X ?? 0), ScreenY(msg.Y ?? 0));
@@ -555,6 +603,9 @@ public sealed class ClientConnection : IDisposable
                     InputInjector.MouseButton(msg.Button, false);
                     break;
                 case "wheel":
+                    // 滚轮事件本来是发给「鼠标底下那个窗口」的，所以也要先把光标挪过去
+                    if (msg.X.HasValue && msg.Y.HasValue)
+                        InputInjector.MouseMove(ScreenX(msg.X.Value), ScreenY(msg.Y.Value));
                     InputInjector.MouseWheel(msg.Delta ?? 0);
                     break;
                 case "key":
@@ -604,8 +655,32 @@ public sealed class ClientConnection : IDisposable
         try { _stream?.Close(); } catch { }
         try { _tcp?.Close(); } catch { }
         DetachStream();
+        ReleaseHeldButtons();
         _host.OnClientClosed(this);
     }
+
+    /// <summary>
+    /// 客户端断开（正常断开、手机切后台被系统杀掉、Wi-Fi 掉线）时，
+    /// 把它按着没松开的鼠标键补一个「松开」。
+    /// 不然对方电脑会一直停在「按住左键拖动」的状态：拖窗口、框选停不下来，
+    /// 桌面上点一下也变成拖拽。
+    /// </summary>
+    private void ReleaseHeldButtons()
+    {
+        if (_pressedButtons.Count == 0) return;
+        try
+        {
+            foreach (var b in _pressedButtons.ToArray())
+            {
+                try { InputInjector.MouseButton(b, false); } catch { }
+            }
+            Log.Write($"客户端断开，已释放它按住的鼠标键：{string.Join("、", _pressedButtons)}");
+        }
+        catch { }
+        finally { _pressedButtons.Clear(); }
+    }
+
+    private readonly HashSet<string> _pressedButtons = new(StringComparer.OrdinalIgnoreCase);
 
     public void Dispose()
     {

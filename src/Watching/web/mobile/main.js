@@ -223,7 +223,16 @@
     if (!viewer.isControl()) return;
     var v = kbd.value;
     if (!v) return;
-    for (var i = 0; i < v.length; i++) viewer.sendKey(v.charAt(i), null);
+    // 按码位遍历：emoji 是代理对，charAt 会把它拆成两个乱七八糟的「按键」
+    var chars = (typeof Array.from === 'function') ? Array.from(v) : v.split('');
+    for (var i = 0; i < chars.length; i++) {
+      var ch = chars[i];
+      // 空白字符发名字更稳（旧版服务端会把 " " 裁成空串直接丢掉）
+      if (ch === ' ') ch = 'space';
+      else if (ch === '\n' || ch === '\r') ch = 'enter';
+      else if (ch === '\t') ch = 'tab';
+      viewer.sendKey(ch, null);
+    }
     kbd.value = '';
   });
 

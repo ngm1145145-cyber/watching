@@ -366,6 +366,21 @@ public class MainActivity : Activity
         _keyInput.SetCursorVisible(false);
         _keyInput.ImeOptions = Android.Views.InputMethods.ImeAction.Done;
         _keyInput.AddTextChangedListener(new KeyWatcher(this));
+        // 退格 / 回车 / Tab 不会产生文字变化，TextWatcher 收不到，必须单独听按键。
+        // 以前只有 TextWatcher，所以手机上按退格没有任何反应（README 里写的「支持退格、回车」是假的）。
+        _keyInput.KeyPress += OnKeyInputKeyPress;
+        _keyInput.EditorAction += (_, e) =>
+        {
+            if (!_controlMode || _client == null) return;
+            if (e.ActionId == Android.Views.InputMethods.ImeAction.Done ||
+                e.ActionId == Android.Views.InputMethods.ImeAction.Go ||
+                e.ActionId == Android.Views.InputMethods.ImeAction.Send ||
+                e.ActionId == Android.Views.InputMethods.ImeAction.Next)
+            {
+                _client.Send(new ClientMessage { Type = "input", Kind = "key", Key = "enter" });
+                e.Handled = true;
+            }
+        };
         var hiddenLp = new LinearLayout.LayoutParams(2, 2);
         bar.AddView(_keyInput, hiddenLp);
 
@@ -522,6 +537,8 @@ public class MainActivity : Activity
 
     private void Disconnect(bool keepUi = false)
     {
+        ReleaseRemoteButton();
+
         if (_client != null)
         {
             _client.StateChanged -= OnStateChanged;
@@ -532,10 +549,10 @@ public class MainActivity : Activity
             _client = null;
         }
 
-        ExitImmersive();
-
         if (!keepUi)
         {
+            // 只有用户主动断开才退出沉浸式；自动重连（切后台再回来）不该把全屏弄没
+            ExitImmersive();
             _wasWatching = false;
             _viewerPanel.Visibility = ViewStates.Gone;
             _loginPanel.Visibility = ViewStates.Visible;
@@ -546,6 +563,25 @@ public class MainActivity : Activity
             _lastDeltaRatio = 0;
             _detailBase = null;
         }
+    }
+
+    /// <summary>把还按着的左键松开（断开 / 切后台时调用，否则对方电脑会一直停在拖动状态）。</summary>
+    private void ReleaseRemoteButton()
+    {
+        CancelLongPressWatch();
+        _remoteLongPressFired = false;
+        if (_client == null || !_remoteKeyDown) { _remoteKeyDown = false; return; }
+
+        try
+        {
+            _client.Send(new ClientMessage
+            {
+                Type = "input", Kind = "up", Button = "left",
+                X = _remoteCurNx, Y = _remoteCurNy
+            });
+        }
+        catch { }
+        _remoteKeyDown = false;
     }
 
     private void OnStateChanged(object sender, ScreenClientState state)
@@ -638,10 +674,18 @@ public class MainActivity : Activity
                 var mutable = bmp.GetConfig() == Bitmap.Config.Argb8888 && bmp.IsMutable
                     ? bmp
                     : bmp.Copy(Bitmap.Config.Argb8888, true);
+                if (mutable == null)
+                {
+                    // 内存紧张时 Copy 会返回 null，直接跳过这一帧，
+                    // 不然后面在 UI 线程上取 Width 会崩
+                    bmp.Recycle();
+                    return;
+                }
                 if (!ReferenceEquals(mutable, bmp)) bmp.Recycle();
 
                 RunOnUiThread(() =>
                 {
+                    if (IsFinishing || IsDestroyed) return;
                     _composite = mutable;
                     _image.SetSourceSize(mutable.Width, mutable.Height);
                     _image.SetImageBitmap(mutable);
@@ -841,12 +885,20 @@ public class MainActivity : Activity
         }
 
         // ---------- 单指 ----------
+        // 会话已经开始之后，坐标一律夹到画面边缘（TryMapToImageClamped）：
+        // 手指从画面拖到上下黑边是常事，以前这里直接 return false，
+        // 结果「松手了却不发 up」→ 对方电脑左键一直按着不放，
+        // 而且长按计时器没被取消，手指抬起后还会补一个莫名的右键。
         float nx, ny;
-        if (!_image.TryMapToImage(e.GetX(), e.GetY(), out nx, out ny)) return false;
+        bool mapped = _remoteTouchActive
+            ? _image.TryMapToImageClamped(e.GetX(), e.GetY(), out nx, out ny)
+            : _image.TryMapToImage(e.GetX(), e.GetY(), out nx, out ny);
+        if (!mapped) return false;
 
         switch (e.ActionMasked)
         {
             case MotionEventActions.Down:
+                _remoteTouchActive = true;
                 _remoteCurNx = nx;
                 _remoteCurNy = ny;
                 _remoteMoved = 0;
@@ -884,6 +936,7 @@ public class MainActivity : Activity
 
             case MotionEventActions.Up:
                 CancelLongPressWatch();
+                _remoteTouchActive = false;
                 if (_remoteLongPressFired) { _remoteLongPressFired = false; return true; }
 
                 if (_remoteKeyDown)
@@ -901,6 +954,7 @@ public class MainActivity : Activity
 
             case MotionEventActions.Cancel:
                 CancelLongPressWatch();
+                _remoteTouchActive = false;
                 if (_remoteKeyDown)
                 {
                     _client.Send(new ClientMessage { Type = "input", Kind = "up", Button = "left", X = nx, Y = ny });
@@ -911,6 +965,9 @@ public class MainActivity : Activity
 
         return false;
     }
+
+    /// <summary>单指远程操作是否正在进行（用于把坐标夹到边缘而不是直接放弃这次触摸）。</summary>
+    private bool _remoteTouchActive;
 
     // ---- 长按 = 右键 ----
 
@@ -1029,6 +1086,36 @@ public class MainActivity : Activity
         _keyInput.ClearFocus();
     }
 
+    /// <summary>
+    /// 退格 / 回车 / Tab / 方向键：这些键不会让输入框文字变化，TextWatcher 收不到，
+    /// 必须在这里单独转发（以前手机上按退格完全没反应）。
+    /// </summary>
+    private void OnKeyInputKeyPress(object sender, Android.Views.View.KeyEventArgs e)
+    {
+        if (!_controlMode || _client == null || e.Event == null) return;
+        if (e.Event.Action != KeyEventActions.Down) return;
+
+        string key = e.Event.KeyCode switch
+        {
+            Keycode.Del => "backspace",
+            Keycode.ForwardDel => "delete",
+            Keycode.Enter => "enter",
+            Keycode.Tab => "tab",
+            Keycode.Escape => "esc",
+            Keycode.DpadUp => "up",
+            Keycode.DpadDown => "down",
+            Keycode.DpadLeft => "left",
+            Keycode.DpadRight => "right",
+            Keycode.MoveHome => "home",
+            Keycode.MoveEnd => "end",
+            _ => null
+        };
+        if (key == null) return;
+
+        _client.Send(new ClientMessage { Type = "input", Kind = "key", Key = key });
+        e.Handled = true;
+    }
+
     /// <summary>把输入法上屏的字符发到服务端（中文、表情等也能用）。</summary>
     private sealed class KeyWatcher : Java.Lang.Object, Android.Text.ITextWatcher
     {
@@ -1043,6 +1130,14 @@ public class MainActivity : Activity
             for (int i = 0; i < text.Length; i++)
             {
                 string ch = text.Substring(i, 1);
+                // 空白字符发名字更稳（旧版服务端会把 " " / "\n" 裁掉）
+                ch = ch switch
+                {
+                    " " => "space",
+                    "\n" or "\r" => "enter",
+                    "\t" => "tab",
+                    _ => ch
+                };
                 _owner._client?.Send(new ClientMessage { Type = "input", Kind = "key", Key = ch });
             }
             s.Clear();

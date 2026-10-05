@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
 | `Watching-win-x64-framework.zip` | 0.2 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
-| `WatchingMobile-1.0.8.apk` | 39.5 MB | 安卓手机 |
+| `WatchingMobile-1.0.9.apk` | 39.5 MB | 安卓手机 |
 
 > 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
 > `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
@@ -169,8 +169,8 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 
 ### 3️⃣ 在 B（手机）上看
 
-**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.8.apk` 传到手机安装
-（或数据线连上后 `adb install -r WatchingMobile-1.0.8.apk`）。
+**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.9.apk` 传到手机安装
+（或数据线连上后 `adb install -r WatchingMobile-1.0.9.apk`）。
 打开 App → 填 `192.168.1.8` 和端口 `8899` → 「开始观看」。
 
 **方式二：用浏览器** —— 手机浏览器打开 `http://192.168.1.8:8899/` → 「开始观看」，免安装。
@@ -363,12 +363,12 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 `
     -SdkDir "D:\android-sdk" -JdkDir "C:\Program Files\Eclipse Adoptium\jdk-17"
 ```
 
-产物：`dist\apk\WatchingMobile-1.0.8.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
+产物：`dist\apk\WatchingMobile-1.0.9.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
 
 安装：
 
 ```bash
-adb install -r dist/apk/WatchingMobile-1.0.8.apk
+adb install -r dist/apk/WatchingMobile-1.0.9.apk
 ```
 
 > 首次编译安卓端需要 `.NET android` 工作负载：`dotnet workload install android`。
@@ -552,7 +552,7 @@ watching/
 │   ├─ serve-static.mjs         本地预览 docs/ 落地页的极简静态服务器
 │   └─ ProtocolCheck/           复用安卓 App 的网络源码，在 Windows 上验证协议
 └─ dist/                        构建产物（未提交到仓库，见 .gitignore）
-    ├─ apk/WatchingMobile-1.0.8.apk
+    ├─ apk/WatchingMobile-1.0.9.apk
     ├─ Watching-win-x64-selfcontained/
     └─ Watching-win-x64-framework/
 ```
@@ -718,7 +718,7 @@ Android 7.x 不支持矢量启动图标，会在启动时崩溃。现在已改�
   双指张开被识别为缩放、不发滚轮
 - **控制消息 → 真实程序**（`tools/inject-verify.mjs`，3/3 通过）：注入的右键被一个真实网页收到
   （`contextmenu` 触发 1 次）；滚轮 `-600` 让真实窗口从 0 滚到 500px，`+600` 又滚回 0
-- **局域网连接与自动发现**（1.0.8 实测）：
+- **局域网连接与自动发现**（1.0.9 实测）：
   - 地址推荐：多网卡机器上只列真实局域网网卡，把 Windows 实际对外发包的那块排第一
     （修掉了以前把 VirtualBox 的 `192.168.56.1` 也列出来、用户照着填连不上的问题）
   - 回包走对网卡：探测/公告都从「对应那块网卡」发出，回包源 IP 与 JSON 里的 `host` 一致
@@ -726,6 +726,12 @@ Android 7.x 不支持矢量启动图标，会在启动时崩溃。现在已改�
     `host` 分别是 `192.168.3.169` 与 `192.168.3.13`
   - 新增「最近收到」活动记录（TCP 连接 / 自动发现探测 / 已连接客户端），
     托盘 → 网络自检里能直接看到「包到底有没有到本机」
+- **新客户端接入一定能拿到整帧**（1.0.9 实测，`tools/keyframe-verify.mjs` 10/10 轮通过）：
+  以前「要一个关键帧」只是一个布尔标志，抓屏线程正好在读它之后、发帧之前收到请求就会被
+  算进下一帧；别人已经在这条流上看时，第二个客户端接入可能只收到增量帧 —— 没有基准画面
+  就是黑屏，桌面不动时能一直黑下去。现在改成「先取再清」+ 接入 1.5 秒还没发帧就再看门狗要一次
+- **增量帧跳号会主动要整帧**（1.0.9）：增量是「相对上一帧」的差量，中间丢过帧的话，
+  客户端手里的基准不对，被跳过那一帧的变化会永久残留在画面上（花屏/残影）直到下个整帧
 
 **未验证 ⚠️**
 
@@ -734,8 +740,11 @@ Android 7.x 不支持矢量启动图标，会在启动时崩溃。现在已改�
 - **安卓端的手势是同一套逻辑的另一份实现**（C# / `MotionEvent`，见 `MainActivity.OnRemoteTouch`），
   上面的手势验证跑的是网页端那份；安卓那份只过了编译期检查，没在真机上摸过。
 
-> ⚠️ 上面两个 `*-verify.mjs` 会**真的操作当前这台电脑的鼠标和键盘**（移动光标、点右键、发 Esc、滚动窗口），
-> 必须在没人用电脑的时候才跑。它们默认拒绝启动，要显式设置 `WATCHING_ALLOW_INPUT_TESTS=1` 才继续。
+> ⚠️ `tools/` 里带 `*-verify.mjs` 的几个脚本会**真的操作当前这台电脑的鼠标和键盘**
+> （移动光标、点右键、发 Esc、滚动窗口，`keyboard-verify.mjs` 还会打开记事本打字）。
+> 它们默认**拒绝启动**，必须显式设置 `WATCHING_ALLOW_INPUT_TESTS=1`；而且必须在
+> **没人用这台电脑**的时候跑 —— 我曾经在用户用电脑时跑过一次，把字打进了他打开的文档里。
+> `keyboard-verify.mjs` 额外加了两道保护：已经有记事本在跑就直接拒绝，且只关它自己启动的那个进程。
 
 ---
 

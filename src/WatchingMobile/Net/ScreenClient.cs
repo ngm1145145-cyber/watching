@@ -37,7 +37,8 @@ public sealed class ScreenClient : IDisposable
     private CancellationTokenSource _cts;
     private Task _task;
     private WsSession _session;
-    private readonly object _sendGate = new();
+    // 发送串行化：UI 线程同步发（Wait(0)/Wait()），接收线程回 pong 用 WaitAsync
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
 
     private int _pendingFrames;
     private long _frames;
@@ -125,8 +126,22 @@ public sealed class ScreenClient : IDisposable
                     Type = "hello",
                     Kind = "mobile",
                     Name = ClientName,
-                    Version = "1.0.8"
+                    Version = "1.0.9"
                 }.ToJson(), ct).ConfigureAwait(false);
+
+                // hello 之后自己的 session 才稳稳存在，这时才能把用户选的画质发过去。
+                // 以前是在 Start() 里紧接着发的，那时 _session 还是 null，等于永远没发，
+                // 结果按钮写着「高清」而实际流还是服务端默认画质。
+                if (_desiredQuality > 0)
+                {
+                    await session.SendTextAsync(new ClientMessage
+                    {
+                        Type = "quality",
+                        Quality = _desiredQuality,
+                        Fps = _desiredFps > 0 ? _desiredFps : (int?)null,
+                        MaxWidth = _desiredWidth
+                    }.ToJson(), ct).ConfigureAwait(false);
+                }
 
                 _statTick = Environment.TickCount64;
                 await ReceiveLoopAsync(session, ct).ConfigureAwait(false);
@@ -186,7 +201,7 @@ public sealed class ScreenClient : IDisposable
                     return;
 
                 case WsSession.Op.Ping:
-                    await session.SendPongAsync(payload, ct).ConfigureAwait(false);
+                    await SendPongAsync(session, payload, ct).ConfigureAwait(false);
                     break;
 
                 case WsSession.Op.Pong:
@@ -294,21 +309,70 @@ public sealed class ScreenClient : IDisposable
     {
         Quality = quality;
         FpsLimit = fps;
+        // 记住用户的选择：连上（含重连）后要重新发一次，不然画质会退回服务端默认值
+        _desiredQuality = quality;
+        _desiredFps = fps;
+        _desiredWidth = maxWidth;
         Send(new ClientMessage { Type = "quality", Quality = quality, Fps = fps, MaxWidth = maxWidth });
     }
 
+    private int _desiredQuality;
+    private int _desiredFps;
+    private int? _desiredWidth;
+
+    /// <summary>
+    /// 发一条控制消息。这个方法会被 UI 线程直接调用（触摸/按键），所以**绝不能长时间阻塞**：
+    ///   - 鼠标移动是可以丢的：拖动时每秒 60~120 条，链路一卡就把 UI 线程堵死（ANR），
+    ///     所以拿不到发送锁就直接丢掉这一条；
+    ///   - 其它消息（按键、点击）带 500ms 超时，超时就当链路已经死了，断开重连。
+    /// </summary>
     public void Send(ClientMessage msg)
     {
         var session = _session;
-        if (session == null) return;
+        if (session == null || msg == null) return;
+
+        bool isMove = string.Equals(msg.Kind, "move", StringComparison.OrdinalIgnoreCase);
+
+        if (isMove)
+        {
+            if (!_sendGate.Wait(0)) return;      // 移动可以丢，绝不阻塞 UI
+        }
+        else
+        {
+            _sendGate.Wait();
+        }
+
         try
         {
-            lock (_sendGate)
-            {
-                session.SendTextAsync(msg.ToJson(), CancellationToken.None).GetAwaiter().GetResult();
-            }
+            session = _session;
+            if (session == null) return;
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+            session.SendTextAsync(msg.ToJson(), timeout.Token).GetAwaiter().GetResult();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            if (!isMove) _lastError = "发送失败：" + ex.Message;
+        }
+        finally
+        {
+            try { _sendGate.Release(); } catch { }
+        }
+    }
+
+    /// <summary>在接收线程上回 pong：必须和上面的发送共用同一把锁，
+    /// 否则两个线程同时往一个 NetworkStream 写，帧会互相插进去。</summary>
+    private async Task SendPongAsync(WsSession session, byte[] payload, CancellationToken ct)
+    {
+        await _sendGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await session.SendPongAsync(payload, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
     }
 
     public void Dispose() => Stop();

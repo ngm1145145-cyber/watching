@@ -57,9 +57,18 @@ public sealed class ScreenEncoder : IDisposable
     public void SetQuality(int quality)
     {
         int q = Math.Clamp(quality, 20, 95);
-        if (q == _quality && _encoderParams.Param[0] != null) return;
-        _quality = q;
-        _encoderParams.Param[0] = new EncoderParameter(Encoder.Quality, (long)q);
+
+        // 必须和 Capture 用同一把锁：_encoderParams 会直接交给 GDI+ 的 Save 使用，
+        // 抓屏线程正在编码时从别的线程改它，会编出错误画质甚至抛 ExternalException。
+        lock (_captureGate)
+        {
+            if (q == _quality && _encoderParams.Param[0] != null) return;
+            _quality = q;
+
+            var old = _encoderParams.Param[0];
+            _encoderParams.Param[0] = new EncoderParameter(Encoder.Quality, (long)q);
+            try { old?.Dispose(); } catch { }
+        }
     }
 
     public static Rectangle VirtualScreenBounds()

@@ -16,6 +16,7 @@ public sealed class CaptureStream : IDisposable
 {
     private readonly CaptureEngine _engine;
     private int _refs;
+    private volatile bool _disposed;
 
     public string Key { get; }
     public int Quality { get; private set; }
@@ -39,16 +40,33 @@ public sealed class CaptureStream : IDisposable
         _engine.Start();
     }
 
-    public void Acquire()
+    /// <summary>占用这条流。已经被回收时返回 false（调用方重新建一条）。</summary>
+    public bool TryAcquire()
     {
+        if (_disposed) return false;
         Interlocked.Increment(ref _refs);
-        _engine.Subscribe();
+        if (_disposed)
+        {
+            // 回收线程刚好在这一瞬间把它 Dispose 了：退回去，别去碰已经释放的等待事件
+            Interlocked.Decrement(ref _refs);
+            return false;
+        }
+        try
+        {
+            _engine.Subscribe();
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            Interlocked.Decrement(ref _refs);
+            return false;
+        }
     }
 
     public void Release()
     {
         if (Interlocked.Decrement(ref _refs) <= 0) Interlocked.Exchange(ref _refs, 0);
-        _engine.Unsubscribe();
+        if (!_disposed) _engine.Unsubscribe();
     }
 
     /// <summary>同一个客户端改变画质时更新这条流（键已包含这些参数，所以通常只有最后一个客户端会改）。</summary>
@@ -64,6 +82,7 @@ public sealed class CaptureStream : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         try { _engine.Dispose(); } catch { }
     }
 }
@@ -89,9 +108,46 @@ public sealed class CaptureHub : IDisposable
     public CaptureStream Acquire(int quality, int fps, int maxWidth, Rectangle crop)
     {
         var key = MakeKey(quality, fps, maxWidth, crop);
-        var stream = _streams.GetOrAdd(key, _ => new CaptureStream(key, quality, fps, maxWidth, crop, DrawCursor));
-        stream.Acquire();
-        return stream;
+
+        // 最多试几次：回收线程可能刚好把这条流收掉，或者 GetOrAdd 的工厂被并发跑了两次
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            CaptureStream stream;
+            bool created = false;
+
+            if (_streams.TryGetValue(key, out var existing))
+            {
+                stream = existing;
+            }
+            else
+            {
+                var candidate = new CaptureStream(key, quality, fps, maxWidth, crop, DrawCursor);
+                if (_streams.TryAdd(key, candidate))
+                {
+                    stream = candidate;
+                    created = true;
+                }
+                else
+                {
+                    // 别人抢先放进去了：把自己多建的那条释放掉，
+                    // 否则它会留下一个永远不退出的抓屏线程
+                    try { candidate.Dispose(); } catch { }
+                    continue;
+                }
+            }
+
+            if (stream.TryAcquire()) return stream;
+
+            // 这条流已经被回收了：从字典里摘掉再重来
+            try { _streams.TryRemove(new KeyValuePair<string, CaptureStream>(key, stream)); } catch { }
+            if (created) { try { stream.Dispose(); } catch { } }
+        }
+
+        // 兜底：极端情况下直接给一条新的（字典里可能留了个已被回收的条目，下次会摘掉）
+        var fresh = new CaptureStream(key, quality, fps, maxWidth, crop, DrawCursor);
+        _streams[key] = fresh;
+        fresh.TryAcquire();
+        return fresh;
     }
 
     /// <summary>新建抓屏流时是否绘制光标（由设置决定）。</summary>

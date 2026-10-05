@@ -9,7 +9,7 @@ namespace Watching.Common;
 public sealed class AppConfig
 {
     /// <summary>程序版本号（握手、自动发现公告、Release 说明都用它，改版本只改这里）。</summary>
-    public const string AppVersion = "1.0.8";
+    public const string AppVersion = "1.0.9";
 
     /// <summary>监听端口。</summary>
     public int Port { get; set; } = 8899;

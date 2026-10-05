@@ -119,7 +119,7 @@ public static class InputInjector
         var inputs = new List<User32.INPUT>(mods.Count * 2 + 2);
 
         foreach (var (mvk, mscan) in mods)
-            inputs.Add(MakeKey(mvk, mscan, false, false));
+            inputs.Add(MakeKey(mvk, mscan, false, IsExtendedVk(mvk)));
 
         if (unicode)
         {
@@ -128,20 +128,55 @@ public static class InputInjector
         }
         else
         {
-            inputs.Add(MakeKey(vk, scan, false, false));
-            inputs.Add(MakeKey(vk, scan, true, false));
+            bool ext = IsExtendedVk(vk);
+            inputs.Add(MakeKey(vk, scan, false, ext));
+            inputs.Add(MakeKey(vk, scan, true, ext));
         }
 
         for (int i = mods.Count - 1; i >= 0; i--)
-            inputs.Add(MakeKey(mods[i].vk, mods[i].scan, true, false));
+            inputs.Add(MakeKey(mods[i].vk, mods[i].scan, true, IsExtendedVk(mods[i].vk)));
 
         Send(inputs.ToArray());
     }
 
+    /// <summary>
+    /// 这些键必须带 KEYEVENTF_EXTENDEDKEY，否则会被当成小键盘上的同名键：
+    /// 方向键会变成 4/8/6/2、Home/End 变 7/1、Delete 变小数点，
+    /// 游戏和用底层钩子的老程序尤其明显。
+    /// </summary>
+    private static bool IsExtendedVk(ushort vk) => vk switch
+    {
+        0x21 or 0x22 or 0x23 or 0x24 => true,   // PageUp / PageDown / End / Home
+        0x25 or 0x26 or 0x27 or 0x28 => true,   // 左 / 上 / 右 / 下
+        0x2D or 0x2E => true,                   // Insert / Delete
+        0x5B or 0x5C => true,                   // 左 Win / 右 Win
+        0x6F => true,                           // 小键盘 /
+        0xA3 or 0xA5 => true,                   // 右 Ctrl / 右 Alt
+        _ => false
+    };
+
     private static bool TryResolveVirtualKey(string key, out ushort vk, out ushort scan, out bool unicode, out char literal)
     {
         vk = 0; scan = 0; unicode = false; literal = '\0';
+        if (string.IsNullOrEmpty(key)) return false;
+
+        // 先处理「按键本身就是空白字符」的情况。
+        // 这里以前无脑 key.Trim()，把 " "（空格）/"\n"（回车）/"\t" 裁成空串后直接返回 false，
+        // 整条按键被静默丢掉 —— 安卓 App 和手机网页的输入法是逐字符发过来的，
+        // 所以手机上空格一直打不出来（回车、制表符同理）。
+        if (key.Length == 1)
+        {
+            switch (key[0])
+            {
+                case ' ': case '\u00A0': vk = 0x20; return true;   // 空格
+                case '\n': case '\r':    vk = 0x0D; return true;   // 回车
+                case '\t':               vk = 0x09; return true;   // 制表符
+                case '\b':               vk = 0x08; return true;   // 退格
+            }
+        }
+
         string k = key.Trim();
+        if (k.Length == 0) return false;
 
         if (k.Length == 1)
         {

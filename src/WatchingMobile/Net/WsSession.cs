@@ -46,7 +46,9 @@ public sealed class WsSession : IDisposable
         var tcp = new TcpClient { NoDelay = true };
         try
         {
-            await tcp.ConnectAsync(host, port).ConfigureAwait(false);
+            // 必须把 ct 传进来：不传的话，对方 IP 不可达（SYN 被丢弃、不回 RST）时
+            // 内核会自己重试两分钟，8 秒超时和「断开」都拦不住，界面一直卡在「连接中…」
+            await tcp.ConnectAsync(host, port, ct).ConfigureAwait(false);
         }
         catch
         {
@@ -109,6 +111,17 @@ public sealed class WsSession : IDisposable
 
         if (end < 0) return false;
 
+        // 101 之后服务端可能紧接着就把第一帧（welcome / state）发过来了，
+        // 同一次 read 里多出来的这些字节必须留着给 ReadFrameAsync，
+        // 以前的实现直接把它们丢掉，帧流会错位（表现为「已连接但没有画面」）
+        int surplus = total - (end + 4);
+        if (surplus > 0)
+        {
+            _pending = new byte[surplus];
+            Buffer.BlockCopy(buffer, end + 4, _pending, 0, surplus);
+            _pendingOffset = 0;
+        }
+
         var text = Encoding.UTF8.GetString(buffer, 0, end);
         var lines = text.Split(new[] { "\r\n" }, StringSplitOptions.None);
         HttpStatusLine = lines.Length > 0 ? lines[0] : null;
@@ -158,6 +171,21 @@ public sealed class WsSession : IDisposable
     {
         var buf = new byte[count];
         int off = 0;
+
+        // 先吃握手时多读出来的字节
+        if (_pendingOffset < _pending.Length)
+        {
+            int take = Math.Min(count, _pending.Length - _pendingOffset);
+            Buffer.BlockCopy(_pending, _pendingOffset, buf, 0, take);
+            _pendingOffset += take;
+            off = take;
+            if (_pendingOffset >= _pending.Length)
+            {
+                _pending = Array.Empty<byte>();
+                _pendingOffset = 0;
+            }
+        }
+
         while (off < count)
         {
             int n = await _stream.ReadAsync(buf.AsMemory(off, count - off), ct).ConfigureAwait(false);
@@ -166,6 +194,9 @@ public sealed class WsSession : IDisposable
         }
         return buf;
     }
+
+    private byte[] _pending = Array.Empty<byte>();
+    private int _pendingOffset;
 
     public Task SendTextAsync(string text, CancellationToken ct)
         => SendAsync(Op.Text, Encoding.UTF8.GetBytes(text ?? ""), ct);
