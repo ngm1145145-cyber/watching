@@ -455,6 +455,7 @@ public sealed class ClientConnection : IDisposable
                 if (!string.IsNullOrEmpty(ClientName) && ClientName.Length > 40)
                     ClientName = ClientName.Substring(0, 40);
                 Log.Write($"客户端接入 [{Kind}] {RemoteAddress} {ClientName}");
+                NetworkActivity.Record("已连接", RemoteAddress, $"{Kind} {ClientName}".Trim());
                 QueueText(new ServerMessage
                 {
                     Type = "welcome",
@@ -465,7 +466,7 @@ public sealed class ClientConnection : IDisposable
                     MaxWidth = _maxWidth,
                     RemoteControl = _host.RemoteControlEnabled,
                     MachineName = Environment.MachineName,
-                    Version = "1.0.7"
+                    Version = AppConfig.AppVersion
                 });
                 _host.OnClientSettingsChanged(this);
                 break;

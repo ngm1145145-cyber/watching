@@ -4,7 +4,6 @@ using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Threading;
 using Watching.Common;
 
 namespace Watching.Server;
@@ -19,6 +18,10 @@ public sealed class NetworkAdapterInfo
     public bool LooksUsable { get; set; }
     /// <summary>是否虚拟机网卡（VirtualBox / VMware / Hyper-V）。</summary>
     public bool LooksVirtual { get; set; }
+    /// <summary>这块网卡有没有默认网关（有网关的通常才是真正连路由器的那个）。</summary>
+    public bool HasGateway { get; set; }
+    /// <summary>是不是 Windows 实际用来对外发包的那块网卡（最可能被手机连上的就是它）。</summary>
+    public bool IsPreferred { get; set; }
 }
 
 /// <summary>
@@ -39,24 +42,53 @@ public sealed class NetworkDiagnostics
         d.FillAdapters();
         d.TcpRuleExists = FirewallHelper.RuleExists(FirewallHelper.TcpRuleName);
         d.UdpRuleExists = FirewallHelper.RuleExists(FirewallHelper.UdpRuleName);
-        d.PrimaryIp = d.Adapters.Where(a => a.LooksUsable).Select(a => a.Ip).FirstOrDefault()
-                      ?? d.Adapters.Select(a => a.Ip).FirstOrDefault();
+        d.PrimaryIp = d.BestAddresses().Select(a => a.Ip).FirstOrDefault();
         d.AnyUsableAdapter = d.Adapters.Any(a => a.LooksUsable);
         return d;
+    }
+
+    /// <summary>
+    /// 按「哪个地址最可能连得上」排序。多网卡机器（比如又插网线又连 WiFi、
+    /// 或者装了 VirtualBox 虚拟机网卡）以前会把 192.168.56.1 这种客户端根本
+    /// 连不上的地址排在最前面，用户照着填当然连不上。
+    ///   1. Windows 实际对外发包用的那块网卡
+    ///   2. 其它有默认网关的物理网卡 —— 手机和别的电脑通常就在这个网段
+    ///   3. 其它物理网卡
+    ///   4. 虚拟机网卡（最后才列）
+    /// </summary>
+    public List<NetworkAdapterInfo> BestAddresses()
+    {
+        return Adapters
+            .OrderByDescending(a => a.IsPreferred)
+            .ThenByDescending(a => a.LooksUsable)
+            .ThenByDescending(a => a.HasGateway)
+            .ThenByDescending(a => !a.LooksVirtual)
+            .ToList();
     }
 
     private void FillAdapters()
     {
         try
         {
+            var preferred = PreferredOutboundIp();
+
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
             {
                 if (ni.OperationalStatus != OperationalStatus.Up) continue;
                 if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
                 if (ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
 
-                var desc = ni.Name + " —— " + ni.Description;
                 bool virt = LooksLikeVirtual(ni.Name + " " + ni.Description);
+                bool hasGateway = false;
+
+                try
+                {
+                    hasGateway = ni.GetIPProperties().GatewayAddresses.Any(g =>
+                        g.Address != null &&
+                        g.Address.AddressFamily == AddressFamily.InterNetwork &&
+                        !g.Address.Equals(IPAddress.Any));
+                }
+                catch { }
 
                 foreach (var addr in ni.GetIPProperties().UnicastAddresses)
                 {
@@ -71,7 +103,9 @@ public sealed class NetworkDiagnostics
                         Ip = ip,
                         Type = ni.NetworkInterfaceType,
                         LooksVirtual = virt,
-                        LooksUsable = !virt && !IPAddress.IsLoopback(addr.Address)
+                        LooksUsable = !virt && !IPAddress.IsLoopback(addr.Address),
+                        HasGateway = hasGateway,
+                        IsPreferred = preferred != null && preferred.Equals(addr.Address)
                     });
                 }
             }
@@ -80,6 +114,23 @@ public sealed class NetworkDiagnostics
         {
             Log.Error("枚举网卡失败", ex);
         }
+    }
+
+    /// <summary>
+    /// 问一下系统：如果要往公网发包，会用本机哪个 IP？
+    /// 这是「哪块网卡是主网卡」最可靠的判断，而且 UDP connect 不会真的发数据。
+    /// </summary>
+    private static IPAddress PreferredOutboundIp()
+    {
+        try
+        {
+            using var probe = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            probe.Connect(new IPEndPoint(IPAddress.Parse("8.8.8.8"), 53));
+            if (probe.LocalEndPoint is IPEndPoint local && !IPAddress.IsLoopback(local.Address))
+                return local.Address;
+        }
+        catch { }
+        return null;
     }
 
     private static bool LooksLikeVirtual(string text)
@@ -131,13 +182,18 @@ public sealed class NetworkDiagnostics
         }
     }
 
-    /// <summary>列出所有提示用的地址。</summary>
+    /// <summary>
+    /// 列出提示用的地址（推荐的在最前面）。
+    /// 有真实局域网网卡时只列它们，虚拟机网卡（192.168.56.x 这种）不显示，
+    /// 免得用户照着填然后连不上；一块可用网卡都没有时才全部列出。
+    /// </summary>
     public List<string> Urls(int port)
     {
-        var list = new List<string>();
-        foreach (var a in Adapters.Where(a => a.LooksUsable)) list.Add($"http://{a.Ip}:{port}/");
-        if (list.Count == 0)
-            foreach (var a in Adapters) list.Add($"http://{a.Ip}:{port}/");
+        var ordered = BestAddresses();
+        var usable = ordered.Where(a => a.LooksUsable).ToList();
+        if (usable.Count == 0) usable = ordered;
+
+        var list = usable.Select(a => $"http://{a.Ip}:{port}/").ToList();
         if (list.Count == 0) list.Add($"http://127.0.0.1:{port}/");
         return list.Distinct().ToList();
     }

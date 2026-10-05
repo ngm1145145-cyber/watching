@@ -61,6 +61,21 @@ public sealed class NetServer : IDisposable
             {
                 var tcp = _listener.AcceptTcpClient();
                 TuneSocket(tcp);
+
+                // 记一笔：排查「手机连不上」时，这一行能区分
+                // 「包根本没到本机」和「到了但被拒绝」
+                try
+                {
+                    var remote = tcp.Client.RemoteEndPoint as IPEndPoint;
+                    if (remote != null)
+                    {
+                        NetworkActivity.Record("TCP连接", remote.Address.ToString(), "端口 " + remote.Port);
+                        if (!IPAddress.IsLoopback(remote.Address))
+                            Log.Write($"收到局域网 TCP 连接：{remote.Address}:{remote.Port}");
+                    }
+                }
+                catch { }
+
                 var t = new Thread(() => HandleTcp(tcp)) { IsBackground = true };
                 t.Start();
             }

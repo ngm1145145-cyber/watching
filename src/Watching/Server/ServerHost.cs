@@ -130,30 +130,30 @@ public sealed class ServerHost : IDisposable
         return $"{list.Count} 个客户端已连接：" + string.Join("、", list.Select(c => c.Describe()));
     }
 
-    /// <summary>本机所有可用的局域网地址（用于显示给用户 / 生成连接二维码文本）。</summary>
+    /// <summary>
+    /// 本机所有可用的局域网地址（用于显示给用户 / 生成连接二维码文本）。
+    /// 走 NetworkDiagnostics 的过滤与排序：排除 169.254 和虚拟机网卡，
+    /// 把「Windows 实际对外发包用的那块网卡」排在最前面。
+    /// </summary>
     public List<string> LocalUrls()
     {
-        var urls = new List<string>();
         try
         {
-            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                if (ni.OperationalStatus != OperationalStatus.Up) continue;
-                if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
-
-                foreach (var addr in ni.GetIPProperties().UnicastAddresses)
-                {
-                    if (addr.Address.AddressFamily != AddressFamily.InterNetwork) continue;
-                    var ip = addr.Address.ToString();
-                    if (ip.StartsWith("169.254.")) continue;
-                    urls.Add($"http://{ip}:{_config.Port}/");
-                }
-            }
+            var urls = NetworkDiagnostics.Run().Urls(_config.Port);
+            if (urls.Count > 0) return urls;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.Error("枚举本机地址失败", ex);
+        }
+        return new List<string> { $"http://127.0.0.1:{_config.Port}/" };
+    }
 
-        if (urls.Count == 0) urls.Add($"http://127.0.0.1:{_config.Port}/");
-        return urls.Distinct().ToList();
+    /// <summary>推荐给用户填的那个地址（多网卡时最可能是对的那个）。</summary>
+    public string PrimaryUrl()
+    {
+        var urls = LocalUrls();
+        return urls.Count > 0 ? urls[0] : $"http://127.0.0.1:{_config.Port}/";
     }
 
     public List<string> LocalHostNames()

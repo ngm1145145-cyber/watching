@@ -8,6 +8,9 @@ namespace Watching.Common;
 /// <summary>服务端设置，保存在 %AppData%\Watching\config.json。</summary>
 public sealed class AppConfig
 {
+    /// <summary>程序版本号（握手、自动发现公告、Release 说明都用它，改版本只改这里）。</summary>
+    public const string AppVersion = "1.0.8";
+
     /// <summary>监听端口。</summary>
     public int Port { get; set; } = 8899;
 

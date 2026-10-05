@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
 | `Watching-win-x64-framework.zip` | 0.2 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
-| `WatchingMobile-1.0.7.apk` | 39.5 MB | 安卓手机 |
+| `WatchingMobile-1.0.8.apk` | 39.5 MB | 安卓手机 |
 
 > 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
 > `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
@@ -169,8 +169,8 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 
 ### 3️⃣ 在 B（手机）上看
 
-**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.7.apk` 传到手机安装
-（或数据线连上后 `adb install -r WatchingMobile-1.0.7.apk`）。
+**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.8.apk` 传到手机安装
+（或数据线连上后 `adb install -r WatchingMobile-1.0.8.apk`）。
 打开 App → 填 `192.168.1.8` 和端口 `8899` → 「开始观看」。
 
 **方式二：用浏览器** —— 手机浏览器打开 `http://192.168.1.8:8899/` → 「开始观看」，免安装。
@@ -363,12 +363,12 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 `
     -SdkDir "D:\android-sdk" -JdkDir "C:\Program Files\Eclipse Adoptium\jdk-17"
 ```
 
-产物：`dist\apk\WatchingMobile-1.0.7.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
+产物：`dist\apk\WatchingMobile-1.0.8.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
 
 安装：
 
 ```bash
-adb install -r dist/apk/WatchingMobile-1.0.7.apk
+adb install -r dist/apk/WatchingMobile-1.0.8.apk
 ```
 
 > 首次编译安卓端需要 `.NET android` 工作负载：`dotnet workload install android`。
@@ -552,7 +552,7 @@ watching/
 │   ├─ serve-static.mjs         本地预览 docs/ 落地页的极简静态服务器
 │   └─ ProtocolCheck/           复用安卓 App 的网络源码，在 Windows 上验证协议
 └─ dist/                        构建产物（未提交到仓库，见 .gitignore）
-    ├─ apk/WatchingMobile-1.0.7.apk
+    ├─ apk/WatchingMobile-1.0.8.apk
     ├─ Watching-win-x64-selfcontained/
     └─ Watching-win-x64-framework/
 ```
@@ -602,6 +602,36 @@ git push gitcode v1.0.0     # GitCode
 2. 在电脑上运行 `shortcuts\5-网络诊断.bat`，它会检查监听状态、本机 IP、防火墙规则。
 3. 确认 Windows 防火墙放行了 8899：管理员运行 `shortcuts\4-添加防火墙规则.bat`。
 4. 如果是公司/学校网络，可能开了**客户端隔离**，同一 WiFi 的设备互相不通，需要换网络或用手机热点。
+</details>
+
+<details>
+<summary><b>怎么一眼看出「包到底有没有到这台电脑」？</b></summary>
+
+托盘图标右键 → **网络自检**，窗口最下面有一段 **「最近收到（本机视角）」**：
+
+- **有记录**（例如 `15:22:31  TCP连接  来自 192.168.3.187`）说明对方的包已经到本机了，
+  问题在别处（密码、防火墙之外的策略、客户端太老等），按提示继续查。
+- **一条都没有**说明**包根本没到**，服务端这边没问题，重点查这三样：
+  1. 对方填的 IP 是不是窗口里「推荐用第一个」的那个 —— 本机 IP 会变（DHCP 换租约、
+     换 WiFi 都会变），照旧笔记里抄的地址可能已经失效；
+  2. 手机/电脑和这台电脑是不是真的同一个 WiFi（2.4G 与 5G 的**不同 SSID**、
+     访客网络，都可能互相不通）；
+  3. 路由器有没有开 **AP 隔离 / 客户端隔离**。
+
+同时日志里也会有对应记录：`收到局域网 TCP 连接：…`、`收到自动发现探测：… → 已回复 http://…/`。
+</details>
+
+<details>
+<summary><b>自动发现（搜索服务端）搜不到？</b></summary>
+
+自动发现走 UDP 8899，需要**两条都通**：
+
+- **探测与应答**：客户端广播 `WATCHING_DISCOVER`，服务端用「探测进来的那块网卡」回包，
+  回的地址就是对方能连上的地址（多网卡机器不会再把回包从另一块网卡发出去）。
+- **定时公告**：服务端每 20 秒向**每一块网卡**的广播地址各发一次公告，客户端只听也能发现。
+
+排查：托盘 → 网络自检，看「自动发现：已开启」和「最近收到」里有没有 `发现探测`；
+UDP 没放行时 TCP 能连但搜不到，点「一键放行防火墙」会同时加 TCP 和 UDP 两条规则。
 </details>
 
 <details>
@@ -688,6 +718,14 @@ Android 7.x 不支持矢量启动图标，会在启动时崩溃。现在已改�
   双指张开被识别为缩放、不发滚轮
 - **控制消息 → 真实程序**（`tools/inject-verify.mjs`，3/3 通过）：注入的右键被一个真实网页收到
   （`contextmenu` 触发 1 次）；滚轮 `-600` 让真实窗口从 0 滚到 500px，`+600` 又滚回 0
+- **局域网连接与自动发现**（1.0.8 实测）：
+  - 地址推荐：多网卡机器上只列真实局域网网卡，把 Windows 实际对外发包的那块排第一
+    （修掉了以前把 VirtualBox 的 `192.168.56.1` 也列出来、用户照着填连不上的问题）
+  - 回包走对网卡：探测/公告都从「对应那块网卡」发出，回包源 IP 与 JSON 里的 `host` 一致
+  - 公告覆盖所有网卡：26 秒内抓到 8 条公告（2 轮 × 2 块网卡 × 2 个广播地址），
+    `host` 分别是 `192.168.3.169` 与 `192.168.3.13`
+  - 新增「最近收到」活动记录（TCP 连接 / 自动发现探测 / 已连接客户端），
+    托盘 → 网络自检里能直接看到「包到底有没有到本机」
 
 **未验证 ⚠️**
 

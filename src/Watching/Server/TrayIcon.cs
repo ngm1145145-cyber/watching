@@ -180,13 +180,37 @@ public sealed class TrayIcon : IDisposable
             sb.AppendLine($"自动发现：{(_host.DiscoveryRunning ? "已开启" : "未开启")}" +
                           $"    监听端口：{_host.Port}");
             sb.AppendLine();
-            sb.AppendLine("本机可用地址：");
-            foreach (var url in _host.LocalUrls()) sb.AppendLine("    " + url);
+            sb.AppendLine("本机可用地址（推荐用第一个）：");
+            var urls = _host.LocalUrls();
+            foreach (var url in urls) sb.AppendLine("    " + url);
             sb.AppendLine();
             sb.AppendLine("网卡明细：");
             foreach (var a in diag.Adapters)
             {
                 sb.AppendLine($"    {a.Ip,-16} {(a.LooksUsable ? "可用" : a.LooksVirtual ? "虚拟机网卡（客户端一般连不上）" : "不推荐")}    {a.Name}");
+            }
+
+            // ---- 最近收到的局域网活动：判断包到底有没有进来 ----
+            sb.AppendLine();
+            sb.AppendLine("最近收到（本机视角，最多 12 条）：");
+            var recent = Common.NetworkActivity.Recent(12);
+            if (recent.Count == 0)
+            {
+                sb.AppendLine("    （什么都没有）");
+            }
+            else
+            {
+                foreach (var e in recent) sb.AppendLine("    " + e);
+            }
+
+            if (!Common.NetworkActivity.HasRemote)
+            {
+                sb.AppendLine();
+                sb.AppendLine("⚠ 从来没有收到过别的设备的连接或探测 —— 说明包根本没到这台电脑，");
+                sb.AppendLine("   服务端这边没问题，请检查：");
+                sb.AppendLine("   1) 对方填的 IP 是不是上面「推荐用第一个」的那个（本机 IP 会变）；");
+                sb.AppendLine("   2) 手机/电脑和这台电脑是不是连的同一个 WiFi（不同频段/访客网络可能互通不了）；");
+                sb.AppendLine("   3) 路由器有没有开「AP 隔离 / 客户端隔离」，开了就互相都连不上。");
             }
 
             if (diag.NeedsFix)
