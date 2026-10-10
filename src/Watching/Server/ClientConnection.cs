@@ -89,9 +89,10 @@ public sealed class ClientConnection : IDisposable
             _hub.Release(old);
             _lastSentSeq = -1;
         }
+        _sentKeyFrame = false;   // 换了流 / 重连：客户端手上的基准不作数了
         if (DebugSend)
-            Log.Write($"[SENDDBG] {Id} 绑定流 {stream.Key}（当前序号 {stream.Engine.Sequence}，" +
-                      $"订阅 {stream.Engine.SubscriberCount}，_lastSentSeq={_lastSentSeq}）");
+            Log.Write($"[SENDDBG] {Id} ATTACH key={stream.Key} eng={stream.Engine.Sequence} " +
+                      $"subs={stream.Engine.SubscriberCount} sent={_lastSentSeq}");
     }
 
     /// <summary>置 WATCHING_DEBUG_SEND=1 可以打印发送循环的每次判断，排查「连上没画面」用。</summary>
@@ -166,27 +167,58 @@ public sealed class ClientConnection : IDisposable
                 var stream = Volatile.Read(ref _streamRef);
                 if (stream == null)
                 {
-                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 还没有绑定的抓屏流");
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} NOSTREAM");
                     await Task.Delay(50, _cts.Token).ConfigureAwait(false);
                     continue;
                 }
 
+                // 还没有基准画面（刚接入 / 刚改过画质）：直接取引擎「最近一次整帧」，
+                // 而不是只看最新一帧再请求整帧。
+                // 原因：请求出来的整帧只要被随后发布的增量顶掉，客户端就永远读不到它，
+                // 于是不停请求、不停错过 —— 实测这就是「连上了长时间黑屏」的根因。
+                if (!_sentKeyFrame)
+                {
+                    if (stream.Engine.TryGetLatestFull(out var fullDelta, out long fullSeq, out int fw, out int fh) &&
+                        fullDelta != null)
+                    {
+                        var fullPacket = BuildFullFramePacket(fullSeq, fullDelta, effectiveQuality, stream, fw, fh);
+                        if (fullPacket != null)
+                        {
+                            await WebSocketProtocol.WriteFrameAsync(_stream, fullPacket, WebSocketProtocol.OpBinary, _cts.Token)
+                                .ConfigureAwait(false);
+
+                            _sentKeyFrame = true;
+                            _lastSentSeq = fullSeq;
+                            _lastFrameLength = fullDelta.FullJpeg.Length;
+                            if (_config.SkipUnchangedFrames) _lastFrameHash = Hash64(fullDelta.FullJpeg);
+                            _framesSent++;
+                            _fullFramesSent++;
+                            _bytesInWindow += fullPacket.Length;
+
+                            if (DebugSend) Log.Write($"[SENDDBG] {Id} SENTKEY seq={fullSeq} {fullPacket.Length >> 10}KB");
+                            continue;
+                        }
+                    }
+
+                    // 引擎还没产出过整帧（刚建流）：要一个，下一轮再来取
+                    stream.Engine.RequestKeyFrame();
+                    await Task.Delay(30, _cts.Token).ConfigureAwait(false);
+                    continue;
+                }
+
                 // 兜底看门狗：接入 1.5 秒还一帧都没发出去，就再要一次整帧。
-                // 「关键帧请求」只是一个布尔标志，抓屏线程要是正好在读它之后、发帧之前
-                // 这一小段里收到请求，就会被算进「下一帧」，极端时序下新客户端会一直
-                // 收不到基准画面（表现就是连上了却一直黑屏，最难排查的一类问题）。
                 if (_framesSent == 0 && attachWatch.ElapsedMilliseconds >= 1500)
                 {
                     attachWatch.Restart();
                     stream.Engine.RequestKeyFrame();
-                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 接入后仍未发出任何帧 → 再要一次整帧（引擎 {stream.Engine.Sequence}）");
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} WATCHDOG no frame sent yet -> request keyframe eng={stream.Engine.Sequence}");
                 }
 
                 // 4) 取最新一帧的可发送内容（整帧 或 只含变化分块的增量）
                 long seq = stream.Engine.Sequence;
                 if (seq == _lastSentSeq || !stream.Engine.Active)
                 {
-                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 等待新帧（引擎序号 {seq}，已发 {_lastSentSeq}，订阅 {stream.Engine.SubscriberCount}）");
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} WAIT eng={seq} sent={_lastSentSeq} subs={stream.Engine.SubscriberCount}");
                     stream.Engine.WaitForFrame(seq, 400);
                     continue;
                 }
@@ -206,10 +238,15 @@ public sealed class ClientConnection : IDisposable
                 // 贴上去以后「只在被跳过那一帧变化」的地方会一直保留旧像素（花屏/残影），
                 // 一直撑到下一个整帧（默认 150 帧 ≈ 7 秒）才恢复。
                 // 所以发现跳号就主动要一个整帧，这一帧的增量直接丢弃。
-                if (!delta.IsFullFrame && (_lastSentSeq < 0 || seq != _lastSentSeq + 1))
+                //
+                // !_sentKeyFrame 这一条更硬：客户端还没拿到过整帧（手里没有基准画面）时，
+                // 任何增量都不能发。以前只判断了「跳号」，而关键帧请求生效之前引擎可能
+                // 又发布了一帧增量（seq 正好 +1），于是新客户端的第一帧就是个增量 ——
+                // 它画不出来，就是「连上了却黑屏」，实测 20 轮里能碰到 1 次。
+                if (!delta.IsFullFrame && (!_sentKeyFrame || _lastSentSeq < 0 || seq != _lastSentSeq + 1))
                 {
                     _resyncKeyFrames++;
-                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 跳号（引擎 {seq} / 已发 {_lastSentSeq}）→ 要整帧");
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} GAP eng={seq} sent={_lastSentSeq} key={_sentKeyFrame} -> request keyframe");
                     stream.Engine.RequestKeyFrame();
                     _lastSentSeq = seq;
                     continue;
@@ -233,6 +270,7 @@ public sealed class ClientConnection : IDisposable
 
                     packet = BuildFullFramePacket(seq, delta, effectiveQuality, stream, w, h);
                     _fullFramesSent++;
+                    _sentKeyFrame = true;      // 客户端这下有基准画面了，之后才能发增量
                 }
                 else
                 {
@@ -247,7 +285,7 @@ public sealed class ClientConnection : IDisposable
 
                 if (packet == null)
                 {
-                    if (DebugSend) Log.Write($"[SENDDBG] {Id} 组包失败（seq={seq} delta={!delta.IsFullFrame}）");
+                    if (DebugSend) Log.Write($"[SENDDBG] {Id} NULLPACKET seq={seq} delta={!delta.IsFullFrame}");
                     await Task.Delay(20, _cts.Token).ConfigureAwait(false);
                     continue;
                 }
@@ -341,6 +379,8 @@ public sealed class ClientConnection : IDisposable
     private ulong _lastFrameHash;
     private long _framesSkipped;
     private long _resyncKeyFrames;
+    /// <summary>这条连接是否已经成功发出过整帧（客户端是否已经有基准画面）。</summary>
+    private bool _sentKeyFrame;
     private long _fullFramesSent;
     private long _deltaFramesSent;
     private long _tilesSent;

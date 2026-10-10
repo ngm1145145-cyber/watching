@@ -17,7 +17,7 @@ function connect(name) {
     const sock = net.connect(port, '127.0.0.1');
     let buf = Buffer.alloc(0);
     let handshake = false;
-    const state = { name, firstMode: null, frames: 0, sock };
+    const state = { name, firstMode: null, frames: 0, sock, t0: 0, firstMs: null };
 
     const maskFrame = (opcode, payload) => {
       const mask = Buffer.from([2, 4, 6, 8]);
@@ -43,6 +43,7 @@ function connect(name) {
         if (i < 0) return;
         handshake = true;
         buf = buf.subarray(i + 4);
+        state.t0 = Date.now();
         send({ t: 'hello', kind: 'pc', name, version: 'probe' });
         resolve(state);
       }
@@ -65,6 +66,7 @@ function connect(name) {
             const meta = JSON.parse(payload.subarray(12, end).toString('utf8'));
             state.firstMode = meta.mode || 'full';
           } catch { state.firstMode = 'unparsed'; }
+          state.firstMs = Date.now() - state.t0;
         }
       }
     });
@@ -74,17 +76,21 @@ function connect(name) {
   });
 }
 
+// 第二路等多久（毫秒）。默认 4 秒：既看「有没有」，也看「有多慢」
+const joinWait = Number(process.argv[4] || 4000);
+
 let bad = 0;
 for (let i = 1; i <= rounds; i++) {
   // 第一路把抓屏流「焐热」，第二路再接进来 —— 复现「别人已经在这条流上看，我连进来」
   const a = await connect('warmup-' + i);
   await sleep(1200);                       // 桌面不动，增量可能是空的；关键是让流处于活跃状态
   const b = await connect('join-' + i);
-  await sleep(1500);
+  await sleep(joinWait);
 
   const ok = b.firstMode === 'full';
   if (!ok) bad++;
-  console.log(`第 ${i} 轮：老客户端=${a.firstMode}(${a.frames}帧)  新接入客户端首帧=${b.firstMode}(${b.frames}帧)  ${ok ? '✅' : '❌ 不是整帧'}`);
+  const lat = b.firstMs === null ? '没收到' : b.firstMs + 'ms';
+  console.log(`第 ${i} 轮：老客户端=${a.firstMode}(${a.frames}帧)  新接入客户端首帧=${b.firstMode}(${b.frames}帧, ${lat})  ${ok ? '✅' : '❌ 不是整帧'}`);
   try { a.sock.destroy(); } catch { }
   try { b.sock.destroy(); } catch { }
   await sleep(400);

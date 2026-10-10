@@ -227,6 +227,9 @@ public sealed class CaptureEngine : IDisposable
 
         var vs = ScreenEncoder.VirtualScreenBounds();
 
+        if (ClientConnection.DebugSend)
+            Log.Write($"[ENGDBG] force={forceKeyFrame} full={delta?.IsFullFrame} tiles={delta?.Tiles?.Count} seq={Interlocked.Read(ref _seq)} sinceKey={_delta.FramesSinceKeyFrame}");
+
         // 画面完全没变化（增量帧且零个块变了）时既不递增序号也不通知客户端，
         // 客户端因此不会收到空帧、也不会误以为有新内容 —— 这就是静态桌面几乎零流量的关键。
         if (delta != null && !delta.IsFullFrame && delta.Tiles.Count == 0)
@@ -252,9 +255,37 @@ public sealed class CaptureEngine : IDisposable
             _screenH = vs.Height;
             _lastCaptureMs = sw.Elapsed.TotalMilliseconds;
             Interlocked.Increment(ref _seq);
+
+            // 单独留一份「最近一次整帧」。
+            // 客户端只看最新一帧，而整帧随时可能被紧接着发布的增量顶掉 ——
+            // 新客户端就会不停请求整帧、不停错过，连上后长时间黑屏。
+            if (delta != null && delta.IsFullFrame)
+            {
+                _latestFull = delta;
+                _latestFullSeq = _seq;
+                _latestFullW = w;
+                _latestFullH = h;
+            }
         }
         _signal.Set();
     }
+
+    /// <summary>最近一次整帧（关键帧）的快照，供「还没有基准画面」的客户端直接取用。</summary>
+    public bool TryGetLatestFull(out DeltaResult delta, out long seq, out int w, out int h)
+    {
+        lock (_gate)
+        {
+            delta = _latestFull;
+            seq = _latestFullSeq;
+            w = _latestFullW;
+            h = _latestFullH;
+            return delta != null;
+        }
+    }
+
+    private DeltaResult _latestFull;
+    private long _latestFullSeq = -1;
+    private int _latestFullW, _latestFullH;
 
     /// <summary>请求下一次抓屏输出整帧（新客户端接入、改过画质、布局变化等）。</summary>
     public void RequestKeyFrame() => _forceKeyFrame = true;
