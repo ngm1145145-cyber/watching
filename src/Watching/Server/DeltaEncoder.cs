@@ -126,7 +126,9 @@ public sealed class DeltaEncoder : IDisposable
                 forceKeyFrame = true;
             }
 
-            var pixels = ReadPixels(bmp);
+            // 双缓冲：本帧写一个缓冲区，另一块留给上一帧做比较，两块轮流用
+            var pixels = ReadPixels(bmp, _useA ? _pixelA : _pixelB);
+            if (_useA) _pixelA = pixels; else _pixelB = pixels;   // 首次是 null，把新分配的记下来供下一轮复用
             bool wantFull = forceKeyFrame || _framesSinceKey >= KeyFrameInterval;
 
             var changed = new List<(Rectangle rect, int tx, int ty)>();
@@ -221,9 +223,13 @@ public sealed class DeltaEncoder : IDisposable
 
             // 记录本帧，供下一帧比较
             _prevPixels = pixels;
+            _useA = !_useA;
             return result;
         }
     }
+
+    private byte[] _pixelA, _pixelB;
+    private bool _useA = true;
 
     private Rectangle TileRect(int tx, int ty, int w, int h)
     {
@@ -258,20 +264,26 @@ public sealed class DeltaEncoder : IDisposable
         for (int ty = 0; ty < tilesY; ty++) _prevHashes[ty] = new ulong[tilesX];
     }
 
-    /// <summary>把位图读成紧凑的 32bpp 像素数组（比 GetPixel 快几个数量级）。</summary>
-    private static byte[] ReadPixels(Bitmap bmp)
+    /// <summary>
+    /// 把位图读成紧凑的 32bpp 像素数组（比 GetPixel 快几个数量级）。
+    /// 复用一个缓冲区（调用方用完就要交还），避免每帧都 new 一个
+    /// 4MB（4K 下 33MB）的数组 + 触发 GC。
+    /// </summary>
+    private static byte[] ReadPixels(Bitmap bmp, byte[] reuse)
     {
         int w = bmp.Width, h = bmp.Height;
+        int need = w * h * 4;
+        if (reuse == null || reuse.Length != need) reuse = new byte[need];
+
         var data = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
         try
         {
-            var buffer = new byte[w * h * 4];
             for (int y = 0; y < h; y++)
             {
                 IntPtr src = IntPtr.Add(data.Scan0, y * data.Stride);
-                System.Runtime.InteropServices.Marshal.Copy(src, buffer, y * w * 4, w * 4);
+                System.Runtime.InteropServices.Marshal.Copy(src, reuse, y * w * 4, w * 4);
             }
-            return buffer;
+            return reuse;
         }
         finally
         {

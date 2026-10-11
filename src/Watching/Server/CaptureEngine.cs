@@ -165,6 +165,11 @@ public sealed class CaptureEngine : IDisposable
             int target = (int)(1000.0 / Math.Max(1, _fps));
             int wait = target - (int)elapsed;
 
+            // 画面一直没变的时候主动降频轮询：BitBlt 一帧在这个虚拟机上要 60ms，
+            // 20fps 空转就是白烧一个多核。改成 5fps 轮询，一旦有变化立刻恢复满帧率。
+            // 鼠标光标是画进画面里的，所以动一下鼠标也算「有变化」，不会被拖慢。
+            if (_idleStreak >= 3 && wait < IdlePollMs) wait = IdlePollMs;
+
             _framesSinceTick++;
             long now = _clock.ElapsedMilliseconds;
             if (now - _lastFpsTick >= 1000)
@@ -199,9 +204,14 @@ public sealed class CaptureEngine : IDisposable
         var sw = Stopwatch.StartNew();
         int w, h;
         byte[] data;
+        bool wantSnapshot = _snapshotWanted > 0;
+        if (wantSnapshot) _snapshotWanted = 0;
         try
         {
-            data = _encoder.Capture(crop, maxWidth, out w, out h);
+            // 只有抓图接口真的要图时才顺便编码一次 JPEG；
+            // 客户端看到的画面由 DeltaEncoder 自己编码（整帧或变化分块）。
+            // 以前这里每帧都白编一张全帧 JPEG，实测占掉整帧耗时的大头。
+            data = _encoder.Capture(crop, maxWidth, out w, out h, encodeJpeg: wantSnapshot);
         }
         catch (Exception ex)
         {
@@ -236,18 +246,32 @@ public sealed class CaptureEngine : IDisposable
         {
             lock (_gate)
             {
+                // 画面没变化也要把抓图接口要的那张 JPEG 交出去（静止桌面正是最常见的情况）
+                if (data != null)
+                {
+                    _latest = data;
+                    Interlocked.Increment(ref _snapVersion);
+                }
                 _frameW = w;
                 _frameH = h;
                 _screenW = vs.Width;
                 _screenH = vs.Height;
                 _lastCaptureMs = sw.Elapsed.TotalMilliseconds;
             }
+            _idleStreak++;      // 连续几帧都没变化，就进入降频轮询
             return;
         }
 
         lock (_gate)
         {
-            _latest = data;
+            // 抓图接口要的 JPEG：优先用这次真的编出来的，其次用整帧路径编出来的，
+            // 都没有就留着上一次的（抓图接口自己会先要一帧新的）
+            if (data != null) _latest = data;
+            else if (delta != null && delta.IsFullFrame) _latest = delta.FullJpeg;
+            if (wantSnapshot) Interlocked.Increment(ref _snapVersion);
+
+            _idleStreak = 0;    // 有画面变化：立刻回到满帧率
+
             _latestDelta = delta;
             _frameW = w;
             _frameH = h;
@@ -288,7 +312,17 @@ public sealed class CaptureEngine : IDisposable
     private int _latestFullW, _latestFullH;
 
     /// <summary>请求下一次抓屏输出整帧（新客户端接入、改过画质、布局变化等）。</summary>
-    public void RequestKeyFrame() => _forceKeyFrame = true;
+    public void RequestKeyFrame()
+    {
+        _forceKeyFrame = true;
+        _signal.Set();      // 顺手唤醒抓屏线程：降频轮询期间也要马上响应新客户端
+    }
+
+    /// <summary>连续多少帧没有变化（用于降频轮询）。</summary>
+    private int _idleStreak;
+
+    /// <summary>空闲时的轮询间隔：5fps。有变化立刻恢复用户设的帧率。</summary>
+    private const int IdlePollMs = 200;
 
     /// <summary>增量编码的累计统计（用于对比省了多少流量）。</summary>
     public DeltaEncoder DeltaStats => _delta;
@@ -311,6 +345,33 @@ public sealed class CaptureEngine : IDisposable
             return delta != null;
         }
     }
+
+    /// <summary>请求下一次抓屏顺便编码一张 JPEG（HTTP 抓图接口用）。</summary>
+    public void RequestSnapshot() => Interlocked.Exchange(ref _snapshotWanted, 1);
+
+    private int _snapshotWanted;
+
+    /// <summary>
+    /// 等一张「刚刚抓下来的」JPEG（最多等 timeoutMs）。抓图接口用它，
+    /// 这样就不用每帧都白编一张图了。
+    /// </summary>
+    public byte[] WaitForSnapshot(int timeoutMs = 800)
+    {
+        long before = Interlocked.Read(ref _snapVersion);
+        RequestSnapshot();
+        var clock = Stopwatch.StartNew();
+        while (clock.ElapsedMilliseconds < timeoutMs)
+        {
+            if (Interlocked.Read(ref _snapVersion) > before)
+            {
+                lock (_gate) { return _latest; }
+            }
+            Thread.Sleep(20);
+        }
+        lock (_gate) { return _latest; }   // 超时：退回上一张（可能稍旧）
+    }
+
+    private long _snapVersion;
 
     /// <summary>当前订阅数（客户端数）。自适应画质只在只有一个客户端时才敢动，
     /// 否则一个慢客户端会把共享同一条流的其它客户端一起降画质。</summary>

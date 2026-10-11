@@ -433,12 +433,16 @@ public sealed class NetServer : IDisposable
         var streamObj = _hub.Acquire(Math.Clamp(_config.Quality, 40, 85), 1, width, crop);
         try
         {
-            byte[] jpeg = null;
-            long start = Environment.TickCount64;
-            while (Environment.TickCount64 - start < 5000)
+            // 抓图接口不再依赖「每帧都编码」了：这里主动要一张刚抓下来的 JPEG
+            byte[] jpeg = streamObj.Engine.WaitForSnapshot(1500);
+            if (jpeg == null)
             {
-                if (streamObj.Engine.TryGetLatest(out jpeg, out _, out _, out _, out _) && jpeg != null) break;
-                Thread.Sleep(60);
+                long start = Environment.TickCount64;
+                while (Environment.TickCount64 - start < 3000)
+                {
+                    if (streamObj.Engine.TryGetLatest(out jpeg, out _, out _, out _, out _) && jpeg != null) break;
+                    jpeg = streamObj.Engine.WaitForSnapshot(500);
+                }
             }
 
             if (jpeg == null)

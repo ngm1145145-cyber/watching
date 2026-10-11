@@ -86,13 +86,23 @@ public sealed class ScreenEncoder : IDisposable
     /// </summary>
     /// <param name="crop">屏幕绝对坐标下的裁剪区域；Empty 表示整个虚拟桌面。</param>
     /// <param name="maxWidth">发送宽度上限，0 表示原始大小。</param>
-    public byte[] Capture(Rectangle crop, int maxWidth, out int outW, out int outH)
+    /// <param name="encodeJpeg">
+    /// 是否顺便把这一帧编码成 JPEG。**默认 false**：WebSocket 客户端要的画面由
+    /// DeltaEncoder 自己编码（整帧或变化分块），这里编出来的图只有 HTTP 抓图接口
+    /// /api/snapshot 用得到。以前每帧都白编一次全帧 JPEG，实测占了整帧耗时的大头
+    /// （1366×768 上「抓屏+编码」约 84ms，编码是其中主要部分），白白吃掉一个核。
+    /// </param>
+    public byte[] Capture(Rectangle crop, int maxWidth, out int outW, out int outH, bool encodeJpeg = false)
     {
         lock (_captureGate)
         {
-            return CaptureLocked(crop, maxWidth, out outW, out outH);
+            _encodeThisFrame = encodeJpeg;
+            try { return CaptureLocked(crop, maxWidth, out outW, out outH); }
+            finally { _encodeThisFrame = false; }
         }
     }
+
+    private bool _encodeThisFrame;
 
     private readonly object _captureGate = new();
 
@@ -129,7 +139,8 @@ public sealed class ScreenEncoder : IDisposable
             outH = _outH;
             LastFrameBitmap = _fullBmp;
             DrawCursor(_fullBmp, crop, crop.Width, crop.Height);
-            return Encode(_fullBmp, crop.Width, crop.Height);
+            LastJpeg = _encodeThisFrame ? Encode(_fullBmp, crop.Width, crop.Height) : null;
+            return LastJpeg;
         }
 
         _outGfx.DrawImage(_fullBmp,
@@ -143,8 +154,12 @@ public sealed class ScreenEncoder : IDisposable
         outW = targetW;
         outH = targetH;
         LastFrameBitmap = _outBmp;
-        return Encode(_outBmp, targetW, targetH);
+        LastJpeg = _encodeThisFrame ? Encode(_outBmp, targetW, targetH) : null;
+        return LastJpeg;
     }
+
+    /// <summary>最近一次「顺便编码」出来的整帧 JPEG（没编就是 null）。</summary>
+    public byte[] LastJpeg { get; private set; }
 
     private byte[] Encode(Bitmap bmp, int w, int h)
     {

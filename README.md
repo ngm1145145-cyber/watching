@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `Watching-win-x64-selfcontained.zip` | 64.6 MB | **被看的电脑 + 查看的电脑**（自带运行时，解压即用） |
 | `Watching-win-x64-framework.zip` | 0.2 MB | 同上，但目标机需装 .NET 10 桌面运行时 |
-| `WatchingMobile-1.0.10.apk` | 39.5 MB | 安卓手机 |
+| `WatchingMobile-1.0.11.apk` | 39.5 MB | 安卓手机 |
 
 > 如果某个平台的 Release 里暂时没有附件，也可以只克隆源码，本地跑
 > `build-release.ps1` / `build-apk.ps1` 自己编译（见[从源码构建](#从源码构建)）。
@@ -169,8 +169,8 @@ Watching.exe --client --connect 192.168.1.8:8899 --password 1234
 
 ### 3️⃣ 在 B（手机）上看
 
-**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.10.apk` 传到手机安装
-（或数据线连上后 `adb install -r WatchingMobile-1.0.10.apk`）。
+**方式一：装 APK（推荐）** —— 把 `dist/apk/WatchingMobile-1.0.11.apk` 传到手机安装
+（或数据线连上后 `adb install -r WatchingMobile-1.0.11.apk`）。
 打开 App → 填 `192.168.1.8` 和端口 `8899` → 「开始观看」。
 
 **方式二：用浏览器** —— 手机浏览器打开 `http://192.168.1.8:8899/` → 「开始观看」，免安装。
@@ -363,12 +363,12 @@ powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 `
     -SdkDir "D:\android-sdk" -JdkDir "C:\Program Files\Eclipse Adoptium\jdk-17"
 ```
 
-产物：`dist\apk\WatchingMobile-1.0.10.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
+产物：`dist\apk\WatchingMobile-1.0.11.apk`（约 39 MB，含 arm64-v8a 与 armeabi-v7a）。
 
 安装：
 
 ```bash
-adb install -r dist/apk/WatchingMobile-1.0.10.apk
+adb install -r dist/apk/WatchingMobile-1.0.11.apk
 ```
 
 > 首次编译安卓端需要 `.NET android` 工作负载：`dotnet workload install android`。
@@ -551,11 +551,12 @@ watching/
 │   ├─ inject-verify.mjs        ⚠会动鼠标：验证控制消息 → 真实程序（右键/滚轮 3 项）
 │   ├─ keyboard-verify.mjs      ⚠会动键盘：验证空格/退格/回车/方向键（有自己的记事本保护）
 │   ├─ keyframe-verify.mjs      不动输入：验证「新客户端接入必得整帧」（黑屏回归测试）
+│   ├─ stream-bench.mjs         不动输入：传输/CPU 基准（帧率、流量、每帧抓屏耗时）
 │   ├─ lan-selfcheck.mjs        不动输入：局域网自检（HTTP/WS/自动发现，用非回环源地址）
 │   ├─ serve-static.mjs         本地预览 docs/ 落地页的极简静态服务器
 │   └─ ProtocolCheck/           复用安卓 App 的网络源码，在 Windows 上验证协议
 └─ dist/                        构建产物（未提交到仓库，见 .gitignore）
-    ├─ apk/WatchingMobile-1.0.10.apk
+    ├─ apk/WatchingMobile-1.0.11.apk
     ├─ Watching-win-x64-selfcontained/
     └─ Watching-win-x64-framework/
 ```
@@ -721,7 +722,7 @@ Android 7.x 不支持矢量启动图标，会在启动时崩溃。现在已改�
   双指张开被识别为缩放、不发滚轮
 - **控制消息 → 真实程序**（`tools/inject-verify.mjs`，3/3 通过）：注入的右键被一个真实网页收到
   （`contextmenu` 触发 1 次）；滚轮 `-600` 让真实窗口从 0 滚到 500px，`+600` 又滚回 0
-- **局域网连接与自动发现**（1.0.10 实测）：
+- **局域网连接与自动发现**（1.0.11 实测）：
   - 地址推荐：多网卡机器上只列真实局域网网卡，把 Windows 实际对外发包的那块排第一
     （修掉了以前把 VirtualBox 的 `192.168.56.1` 也列出来、用户照着填连不上的问题）
   - 回包走对网卡：探测/公告都从「对应那块网卡」发出，回包源 IP 与 JSON 里的 `host` 一致
@@ -729,7 +730,7 @@ Android 7.x 不支持矢量启动图标，会在启动时崩溃。现在已改�
     `host` 分别是 `192.168.3.169` 与 `192.168.3.13`
   - 新增「最近收到」活动记录（TCP 连接 / 自动发现探测 / 已连接客户端），
     托盘 → 网络自检里能直接看到「包到底有没有到本机」
-- **新客户端接入一定能拿到整帧**（1.0.10 实测，`tools/keyframe-verify.mjs` **25/25 轮通过**）：
+- **新客户端接入一定能拿到整帧**（1.0.11 实测，`tools/keyframe-verify.mjs` **25/25 轮通过**）：
   以前「要一个关键帧」只是一个布尔标志，抓屏线程正好在读它之后、发帧之前收到请求就会被
   算进下一帧；更要命的是客户端只看「最新一帧」，请求出来的整帧只要被随后发布的增量顶掉就
   永远读不到 —— 于是不停请求、不停错过。实测表现为：别人正在看时第二个客户端接入
@@ -737,10 +738,24 @@ Android 7.x 不支持矢量启动图标，会在启动时崩溃。现在已改�
   现在改成 ①「先取再清」②接入 1.5 秒还没发帧就由看门狗再要一次 ③引擎单独保留
   「最近一次整帧」，没有基准画面的客户端直接取用，不会被后来的增量挤掉。
   结果：25/25 通过，首帧延迟中位数约 30ms（最长 835ms，仅出现在刚建流那一轮）
-- **增量帧跳号会主动要整帧**（1.0.10）：增量是「相对上一帧」的差量，中间丢过帧的话，
+- **增量帧跳号会主动要整帧**（1.0.11）：增量是「相对上一帧」的差量，中间丢过帧的话，
   客户端手里的基准不对，被跳过那一帧的变化会永久残留在画面上（花屏/残影）直到下个整帧
-- **客户端断开时释放按住的鼠标键**（1.0.10，服务端兜底）：手机切后台被杀、Wi-Fi 掉线，
+- **客户端断开时释放按住的鼠标键**（1.0.11，服务端兜底）：手机切后台被杀、Wi-Fi 掉线，
   都不会再把对方电脑留在「按住左键拖动」的状态
+- **CPU 与流量（1.0.11 实测，`tools/stream-bench.mjs`）**：修掉了三个白烧 CPU 的地方 ——
+  ①每帧都白编一张全帧 JPEG（客户端画面本来就由增量编码器自己编码，那张图只有 HTTP 抓图
+  接口用得到）②画面没变化时仍按满帧率 BitBlt 空转 ③每帧都新分配一块 4MB 像素数组。
+  同一台机器（1366×768）实测：
+
+  | 指标 | 优化前 | 优化后 |
+  | --- | --- | --- |
+  | 每帧抓屏+编码 | 83.7 ms | **58.6 ms**（−30%，省掉的是那次白编码） |
+  | 静止桌面时的 CPU | ≈120% 单核（20fps 空转） | **30% 单核**（−75%，空闲自动降到 5fps 轮询） |
+  | 静止桌面流量 | 15 KB/s | 14 KB/s |
+  | 有新客户端接入时的首帧 | 最长 2.9 秒 / 偶发黑屏 | **8 ms**（25/25 通过） |
+
+  注：剩下的 58ms 几乎全是这台虚拟机 GDI BitBlt 拷 4MB 的开销（≈66 MB/s，正常 PC 上只有几 ms），
+  所以「变化很频繁时」的帧率上限受限于此；空闲降频那条在真机上同样是 3~4 倍的 CPU 节省。
 
 **未验证 ⚠️**
 

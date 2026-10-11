@@ -126,7 +126,7 @@ public sealed class ScreenClient : IDisposable
                     Type = "hello",
                     Kind = "mobile",
                     Name = ClientName,
-                    Version = "1.0.10"
+                    Version = "1.0.11"
                 }.ToJson(), ct).ConfigureAwait(false);
 
                 // hello 之后自己的 session 才稳稳存在，这时才能把用户选的画质发过去。
